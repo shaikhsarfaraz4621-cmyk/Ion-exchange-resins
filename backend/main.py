@@ -156,6 +156,11 @@ app.add_middleware(
 def health():
     return {"status": "online", "service": "Ion Exchange Simulator API", "tick": plant_state.tick}
 
+@app.get("/ping")
+def ping():
+    """Minimal keep-alive endpoint for uptime probes."""
+    return {"status": "ok"}
+
 
 # ─── State Management ───────────────────────────────────────────
 
