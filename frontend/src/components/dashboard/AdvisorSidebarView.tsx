@@ -5,7 +5,7 @@ import { api } from '../../services/api';
 
 export const AdvisorSidebarView: React.FC = () => {
   const [messages, setMessages] = useState<{ role: 'user' | 'assistant', content: string }[]>([
-    { role: 'assistant', content: "Systems initialized. I am your BlueStream Plant Intelligence Advisor. I monitor real-time kinetics, thermal loads, and inventory interlocks across your digital twin. How can I assist with your process optimization today?" }
+    { role: 'assistant', content: "Systems initialized. I am your AUTONEX Plant Intelligence Advisor. I monitor real-time kinetics, thermal loads, and inventory interlocks across your digital twin. How can I assist with your process optimization today?" }
   ]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);

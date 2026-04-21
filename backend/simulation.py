@@ -147,6 +147,7 @@ def simulate_tick(state: PlantState) -> PlantState:
     updated_nodes: list[PlantNode] = []
     edges = state.edges
     inventory = {item.id: item.model_copy() for item in state.inventory}
+    batch_released = next_stage != BatchStage.setup
 
     # Track energy cost delta for this tick (for COGS)
     tick_energy_kwh = 0.0
@@ -171,7 +172,7 @@ def simulate_tick(state: PlantState) -> PlantState:
                 and _find_node(state.nodes, e.target).type == "reactor"
                 for e in edges
             )
-            nd.status = "running" if is_feeding and state.batchStage == BatchStage.setup else "idle"
+            nd.status = "running" if is_feeding and batch_released else "idle"
             current_level = nd.currentLevel or 0
 
             # Low stock alert
@@ -202,13 +203,32 @@ def simulate_tick(state: PlantState) -> PlantState:
             else:
                 state.globalAlerts = [a for a in state.globalAlerts if a.message != msg_out]
 
-            # Consume material in Batches using dynamic config
-            if is_feeding and next_stage == BatchStage.polymerization and state.batchStage == BatchStage.setup:
+            # Live feed drawdown: consume continuously once batch is released.
+            if is_feeding and batch_released:
                 mat_id = "styrene" if (nd.materialType or "").lower() == "styrene" else "dvb"
-                batch_vol = state.batchSize if mat_id == "styrene" else state.batchSize * 0.07 # 7% DVB
+                connected_reactors = [
+                    _find_node(state.nodes, e.target)
+                    for e in edges
+                    if e.source == node.id
+                    and _find_node(state.nodes, e.target) is not None
+                    and _find_node(state.nodes, e.target).type == "reactor"
+                ]
+                connected_reactors = [r for r in connected_reactors if r is not None]
+                running_count = sum(1 for r in connected_reactors if (r.data.status or "").lower() == "running")
+                active_count = running_count or (len(connected_reactors) if connected_reactors else 0)
+
+                # Spread one batch over ~50 polymerization ticks for smooth live depletion.
+                batch_vol = state.batchSize if mat_id == "styrene" else state.batchSize * 0.07  # 7% DVB
+                draw_per_reactor = batch_vol / 50.0
+                consumed = min(current_level, draw_per_reactor * active_count)
+
                 if mat_id in inventory:
-                    inventory[mat_id].currentStock = max(0, inventory[mat_id].currentStock - batch_vol)
-                nd.currentLevel = max(0, current_level - batch_vol)
+                    inventory[mat_id].currentStock = max(0.0, inventory[mat_id].currentStock - consumed)
+                    current_level = min(nd.capacity or inventory[mat_id].maxCapacity, inventory[mat_id].currentStock)
+                else:
+                    current_level = max(0.0, current_level - consumed)
+
+                nd.currentLevel = max(0.0, current_level)
 
             node_idle_flags[node.id] = not is_feeding
 
@@ -222,7 +242,7 @@ def simulate_tick(state: PlantState) -> PlantState:
                 for e in edges
             )
 
-            if has_incoming:
+            if has_incoming and batch_released:
                 # Get factory config for physical dimensions
                 config = next(
                     (c for c in state.factoryConfigs if c.id == nd.configId),
@@ -323,6 +343,12 @@ def simulate_tick(state: PlantState) -> PlantState:
                     nd.moisture if nd.moisture is not None else 2.0,
                     power_adequate
                 )
+
+                # Reagent consumption by process stage (continuous, per running reactor).
+                if next_stage == BatchStage.functionalization and "h2so4" in inventory:
+                    inventory["h2so4"].currentStock = max(0.0, inventory["h2so4"].currentStock - 0.8)
+                if next_stage == BatchStage.hydration and "naoh" in inventory:
+                    inventory["naoh"].currentStock = max(0.0, inventory["naoh"].currentStock - 0.5)
 
                 # ── WIP Production at 50% conversion ─────────
                 if next_conversion >= 50 and current_conv < 50:

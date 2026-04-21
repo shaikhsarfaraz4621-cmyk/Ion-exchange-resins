@@ -57,7 +57,7 @@ export const SidebarNav: React.FC = () => {
             <div className="w-4 h-4 border-2 border-white rounded-sm rotate-45" />
           </div>
           <div>
-            <h1 className="text-white font-black tracking-tight text-lg">BLUE<span className="text-blue-500">STREAM</span></h1>
+            <h1 className="text-white font-black tracking-tight text-lg">AUTO<span className="text-blue-500">NEX</span></h1>
             <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Enterprise Twin</p>
           </div>
         </div>
@@ -115,8 +115,8 @@ export const SidebarNav: React.FC = () => {
              <FaUserCircle className="text-2xl text-slate-600" />
           </div>
           <div className="hidden lg:block overflow-hidden">
-            <p className="text-xs font-bold text-slate-200 truncate">Sarfaraz Ahmed</p>
-            <p className="text-[10px] text-slate-500 font-bold truncate">Systems Operator</p>
+            <p className="text-xs font-bold text-slate-200 truncate">Admin</p>
+            <p className="text-[10px] text-slate-500 font-bold truncate">Admin</p>
           </div>
         </div>
         <button className="w-full flex items-center gap-3 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-red-400/70 hover:text-red-400 hover:bg-red-400/5 rounded-lg transition-all">

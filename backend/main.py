@@ -171,6 +171,14 @@ def _generate_alert_id() -> str:
 def _get_timestamp() -> str:
     return datetime.now().strftime("%I:%M:%S %p")
 
+def _inventory_id_for_material(material_type: str | None) -> str | None:
+    mt = (material_type or "").strip().lower()
+    if mt == "styrene":
+        return "styrene"
+    if mt == "dvb":
+        return "dvb"
+    return None
+
 
 # ─── State Management ───────────────────────────────────────────
 
@@ -251,6 +259,11 @@ def execute_agentic_command(command_str: str):
                 if node.id == node_id:
                     cap = node.data.capacity or 20000
                     node.data.currentLevel = cap * 0.85
+                    inv_id = _inventory_id_for_material(node.data.materialType)
+                    if inv_id:
+                        item = next((i for i in plant_state.inventory if i.id == inv_id), None)
+                        if item:
+                            item.currentStock = min(item.maxCapacity, node.data.currentLevel)
                     node.data.mitigationGraceTicks = 5
                     plant_state.globalAlerts = [a for a in plant_state.globalAlerts if a.nodeId != node_id]
 
@@ -362,6 +375,9 @@ async def apply_demo_scenario(body: dict):
         if not tank:
             return {"status": "skipped", "reason": "No DVB tank found"}
         tank.data.currentLevel = 0.0
+        dvb_item = next((i for i in plant_state.inventory if i.id == "dvb"), None)
+        if dvb_item:
+            dvb_item.currentStock = 0.0
         plant_state.globalAlerts.insert(0, Alert(
             id=_generate_alert_id(),
             type="error",

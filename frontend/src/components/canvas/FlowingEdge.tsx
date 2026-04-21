@@ -36,8 +36,8 @@ export const FlowingEdge: React.FC<EdgeProps> = ({
   const sourceType = sourceNode?.type ?? 'storage';
   const nodeStatus = sourceNode?.data?.status ?? 'idle';
   
-  // Flow logic: Particles flow when simulation is running, unless source is tripped
-  const isActuallyRunning = isSimulating && (nodeStatus === 'running' || sourceType === 'storage');
+  // Flow logic: release particles only when the source node is actually running.
+  const isActuallyRunning = isSimulating && nodeStatus === 'running';
   
   const color = FLOW_COLORS[sourceType] ?? '#94a3b8';
   const strokeColor = (style as React.CSSProperties & { stroke?: string }).stroke ?? color;

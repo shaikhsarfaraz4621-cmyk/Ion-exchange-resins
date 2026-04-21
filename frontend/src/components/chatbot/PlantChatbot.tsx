@@ -112,7 +112,7 @@ export const PlantChatbot: React.FC = () => {
   const tick = useSimulationStore(state => state.tick);
 
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'bot', text: 'BlueStream AI Advisor online. I monitor all plant systems including surge buffers and reactor thermodynamics. Ask me anything.', timestamp: new Date().toLocaleTimeString() }
+    { role: 'bot', text: 'AUTONEX AI Advisor online. I monitor all plant systems including surge buffers and reactor thermodynamics. Ask me anything.', timestamp: new Date().toLocaleTimeString() }
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -256,7 +256,7 @@ export const PlantChatbot: React.FC = () => {
             <FaRobot className="text-sm" />
           </div>
           <div>
-            <h3 className="text-xs font-black uppercase tracking-widest">BlueStream AI</h3>
+            <h3 className="text-xs font-black uppercase tracking-widest">AUTONEX AI</h3>
             <p className="text-[9px] text-slate-400 font-bold">Plant Intelligence Advisor</p>
           </div>
         </div>
