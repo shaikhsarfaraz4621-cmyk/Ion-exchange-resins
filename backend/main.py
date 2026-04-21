@@ -163,6 +163,11 @@ def ping():
     """Minimal keep-alive endpoint for uptime probes."""
     return {"status": "ok"}
 
+@app.head("/ping")
+def ping_head():
+    """HEAD keep-alive endpoint for uptime probes that require HEAD."""
+    return
+
 
 def _generate_alert_id() -> str:
     return ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=9))
