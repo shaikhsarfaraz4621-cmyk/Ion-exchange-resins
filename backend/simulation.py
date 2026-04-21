@@ -28,6 +28,7 @@ JACKET_TEMP = 30.0                 # Cooling jacket setpoint (°C)
 JACKET_COOLING_RATE = 0.15         # Aggressive cooling for stability
 EXOTHERMIC_TRIP_TEMP = 110.0       # Hard trip at 110°C
 HIGH_TEMP_ALERT_THRESHOLD = 80.0   # Soft alert at 80°C
+COOLING_EXIT_TEMP = 65.0
 
 # Dryer constants
 DRYER_DECAY_K = 0.06               # Exponential decay rate for moisture
@@ -231,6 +232,11 @@ def simulate_tick(state: PlantState) -> PlantState:
                 diameter_m = config.geometry.diameter if config else 2.0
                 rpm = nd.rpm or 120.0
                 power_factor = power_number / 5.0
+                cooling_mode = bool(nd.coolingMode)
+                cooling_ticks_remaining = max(0, nd.coolingTicksRemaining or 0)
+                if cooling_mode and cooling_ticks_remaining > 0:
+                    cooling_ticks_remaining -= 1
+                nd.coolingTicksRemaining = cooling_ticks_remaining
 
                 # ── Agitation Power ──────────────────────────
                 power_kw = _calc_agitation_power_kw(power_number, diameter_m, rpm)
@@ -240,7 +246,8 @@ def simulate_tick(state: PlantState) -> PlantState:
 
                 # ── Conversion (S-curve) ─────────────────────
                 current_conv = nd.conversion or 0.0
-                delta_conv = _sigmoidal_conversion(current_conv, tick, power_factor)
+                effective_power_factor = power_factor * (0.45 if cooling_mode else 1.0)
+                delta_conv = _sigmoidal_conversion(current_conv, tick, effective_power_factor)
                 next_conversion = min(100.0, current_conv + delta_conv)
 
                 # ── Thermodynamics: Non-Linear Exothermic Heat ──────────
@@ -253,10 +260,29 @@ def simulate_tick(state: PlantState) -> PlantState:
                 
                 exothermic_rise = REACTION_HEAT_SCALE * delta_conv * auto_accel_factor 
                 cooling = JACKET_COOLING_RATE * (current_temp - JACKET_TEMP)
+                if cooling_mode:
+                    # Emergency cooling profile during thermal recovery.
+                    cooling += 0.45 * max(0.0, current_temp - JACKET_TEMP) + 2.5
                 
                 # Deterministic thermal update (no random jitter) for smooth playback.
                 next_temp = current_temp + exothermic_rise - cooling
                 next_temp = max(JACKET_TEMP, next_temp)
+
+                # Exit cooling mode only after minimum duration and below safe hysteresis threshold.
+                if cooling_mode and cooling_ticks_remaining <= 0 and next_temp < COOLING_EXIT_TEMP:
+                    nd.coolingMode = False
+                    nd.coolingTicksRemaining = 0
+                    recovery_msg = f"THERMAL RECOVERY COMPLETE: {nd.label} stabilized below {int(COOLING_EXIT_TEMP)}°C"
+                    if not any(a.message == recovery_msg for a in state.globalAlerts + new_alerts):
+                        new_alerts.append(Alert(
+                            id=_generate_alert_id(),
+                            type="info",
+                            message=recovery_msg,
+                            timestamp=_get_timestamp(),
+                            nodeId=node.id
+                        ))
+                else:
+                    nd.coolingMode = cooling_mode
 
                 # ── Safety Trip ──────────────────────────────
                 if next_temp >= EXOTHERMIC_TRIP_TEMP and not is_in_grace:
@@ -275,7 +301,7 @@ def simulate_tick(state: PlantState) -> PlantState:
                 # ── High Temp Alert ───────────────────────────
                 msg_temp = f"EXOTHERMIC RISK: {nd.label} exceeds {HIGH_TEMP_ALERT_THRESHOLD}°C"
                 if next_temp > HIGH_TEMP_ALERT_THRESHOLD:
-                    if not any(a.message == msg_temp for a in state.globalAlerts + new_alerts):
+                    if not cooling_mode and not any(a.message == msg_temp for a in state.globalAlerts + new_alerts):
                         new_alerts.append(Alert(
                             id=_generate_alert_id(),
                             type="error",

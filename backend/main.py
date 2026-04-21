@@ -263,6 +263,19 @@ def execute_agentic_command(command_str: str):
                     node.data.mitigationGraceTicks = 5
                     plant_state.globalAlerts = [a for a in plant_state.globalAlerts if a.nodeId != node_id]
 
+        # 5. START_COOLING_MODE (sustained thermal recovery)
+        elif cmd == "START_COOLING_MODE":
+            for node in plant_state.nodes:
+                if node.id == node_id:
+                    base_rpm = node.data.rpm or 120
+                    node.data.rpm = max(35, int(base_rpm * 0.4))
+                    node.data.status = "running"
+                    node.data.coolingMode = True
+                    node.data.coolingTicksRemaining = 12
+                    node.data.mitigationGraceTicks = 12
+                    node.data.temp = max(28, (node.data.temp or 25) - 18)
+                    plant_state.globalAlerts = [a for a in plant_state.globalAlerts if a.nodeId != node_id]
+
         # 5. DRAIN_BUFFER
         elif cmd == "DRAIN_BUFFER":
             for node in plant_state.nodes:
@@ -336,11 +349,17 @@ async def apply_mitigation(body: dict):
 
     # Use the atomic command engine for consistency
     if action == "LOWER_RPM":
-        execute_agentic_command(f"SET_RPM:{node_id}:60")
+        reactor = next((n for n in plant_state.nodes if n.id == node_id and n.type == "reactor"), None)
+        current_temp = reactor.data.temp if reactor and reactor.data.temp is not None else 25.0
+        current_status = (reactor.data.status or "").lower() if reactor else ""
+        # Escalate thermal mitigation to sustained cooling for overheated/tripped reactors.
+        if reactor and (current_temp >= 85.0 or current_status == "tripped"):
+            execute_agentic_command(f"START_COOLING_MODE:{node_id}")
+        else:
+            execute_agentic_command(f"SET_RPM:{node_id}:60")
     elif action == "START_COOLING":
-        # Force cooling and reset status
-        execute_agentic_command(f"SET_TEMP:{node_id}:28.0")
-        execute_agentic_command(f"RESET_STATUS:{node_id}")
+        # Start sustained cooling with reduced reaction intensity and hysteresis exit.
+        execute_agentic_command(f"START_COOLING_MODE:{node_id}")
     elif action == "REPLENISH":
         execute_agentic_command(f"REPLENISH:{node_id}")
     elif action == "DRAIN_BUFFER":

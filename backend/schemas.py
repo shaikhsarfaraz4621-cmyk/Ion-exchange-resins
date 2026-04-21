@@ -46,6 +46,8 @@ class NodeData(BaseModel):
     exothermicDelta: Optional[float] = None
     psdBins: Optional[list[int]] = None
     mitigationGraceTicks: Optional[int] = 0 # Ticks to ignore safety stops after a mitigation
+    coolingMode: Optional[bool] = False
+    coolingTicksRemaining: Optional[int] = 0
 
 
 class PlantNode(BaseModel):
