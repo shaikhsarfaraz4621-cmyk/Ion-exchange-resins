@@ -63,6 +63,18 @@ class ApiService {
     return res.json();
   }
 
+  async triggerDemoScenario(scenario: 'reactor_overheat' | 'feed_starvation' | 'buffer_overflow'): Promise<any> {
+    const res = await fetch(`${this.baseUrl}/simulate/demo-scenario`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenario }),
+    });
+    if (!res.ok) {
+      throw new Error(`Demo scenario error: ${res.status}`);
+    }
+    return res.json();
+  }
+
   // ─── Inventory ───────────────────────────────────────────────
   async getInventory(): Promise<any[]> {
     const res = await fetch(`${this.baseUrl}/inventory`);

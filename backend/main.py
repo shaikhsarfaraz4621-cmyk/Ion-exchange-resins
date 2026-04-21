@@ -6,7 +6,9 @@ The frontend syncs via REST endpoints.
 """
 import asyncio
 import re
+import random
 from contextlib import asynccontextmanager
+from datetime import datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -160,6 +162,14 @@ def health():
 def ping():
     """Minimal keep-alive endpoint for uptime probes."""
     return {"status": "ok"}
+
+
+def _generate_alert_id() -> str:
+    return ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=9))
+
+
+def _get_timestamp() -> str:
+    return datetime.now().strftime("%I:%M:%S %p")
 
 
 # ─── State Management ───────────────────────────────────────────
@@ -316,6 +326,70 @@ async def stop_simulation():
     global plant_state
     plant_state.isSimulating = False
     return {"status": "stopped", "tick": plant_state.tick}
+
+
+@app.post("/simulate/demo-scenario")
+async def apply_demo_scenario(body: dict):
+    """
+    Inject a demo fault/condition so operators can showcase detection and mitigation.
+    Supported values for `scenario`:
+      - reactor_overheat
+      - feed_starvation
+      - buffer_overflow
+    """
+    global plant_state
+    scenario = str(body.get("scenario", "")).strip().lower()
+
+    if scenario == "reactor_overheat":
+        reactor = next((n for n in plant_state.nodes if n.type == "reactor"), None)
+        if not reactor:
+            return {"status": "skipped", "reason": "No reactor found"}
+        reactor.data.temp = max(reactor.data.temp or 25.0, 108.0)
+        reactor.data.conversion = max(reactor.data.conversion or 0.0, 58.0)
+        reactor.data.status = "running"
+        plant_state.globalAlerts.insert(0, Alert(
+            id=_generate_alert_id(),
+            type="error",
+            message=f"DEMO FAULT: {reactor.data.label} entered exothermic runaway window",
+            timestamp=_get_timestamp(),
+            nodeId=reactor.id
+        ))
+        plant_state.globalAlerts = plant_state.globalAlerts[:10]
+        return {"status": "applied", "scenario": scenario, "summary": f"Injected high thermal load on {reactor.id}"}
+
+    if scenario == "feed_starvation":
+        tank = next((n for n in plant_state.nodes if n.type == "storage" and (n.data.materialType or "").lower() == "dvb"), None)
+        if not tank:
+            return {"status": "skipped", "reason": "No DVB tank found"}
+        tank.data.currentLevel = 0.0
+        plant_state.globalAlerts.insert(0, Alert(
+            id=_generate_alert_id(),
+            type="error",
+            message=f"DEMO FAULT: {tank.data.label} depleted to zero",
+            timestamp=_get_timestamp(),
+            nodeId=tank.id
+        ))
+        plant_state.globalAlerts = plant_state.globalAlerts[:10]
+        return {"status": "applied", "scenario": scenario, "summary": f"Forced stockout on {tank.id}"}
+
+    if scenario == "buffer_overflow":
+        buffer_node = next((n for n in plant_state.nodes if n.type == "buffer"), None)
+        if not buffer_node:
+            return {"status": "skipped", "reason": "No surge buffer found"}
+        cap = buffer_node.data.capacity or 8000.0
+        buffer_node.data.currentLevel = cap * 0.97
+        buffer_node.data.status = "running"
+        plant_state.globalAlerts.insert(0, Alert(
+            id=_generate_alert_id(),
+            type="error",
+            message=f"DEMO FAULT: {buffer_node.data.label} pushed into overflow interlock region",
+            timestamp=_get_timestamp(),
+            nodeId=buffer_node.id
+        ))
+        plant_state.globalAlerts = plant_state.globalAlerts[:10]
+        return {"status": "applied", "scenario": scenario, "summary": f"Forced high level on {buffer_node.id}"}
+
+    return {"status": "ignored", "reason": "Unknown scenario", "scenario": scenario}
 
 
 @app.post("/simulate/mitigate")

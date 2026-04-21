@@ -1,7 +1,6 @@
 import React from 'react';
 import { 
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
-  BarChart, Bar, Cell, AreaChart, Area, Legend 
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { useSimulationStore } from '../../store/simulationStore';
 import { GlassCard } from '../shared/GlassCard';
@@ -11,7 +10,6 @@ import {
   FaCogs, 
   FaCheckCircle, 
   FaClock, 
-  FaExclamationTriangle,
   FaArrowUp,
   FaArrowDown
 } from 'react-icons/fa';
@@ -20,16 +18,26 @@ import {
 const ProCard = GlassCard;
 
 export const DashboardView: React.FC = () => {
-  const { simulationHistory, batchStage, nodes } = useSimulationStore();
+  const { simulationHistory, batchStage, nodes, globalAlerts } = useSimulationStore();
 
-  const activeReactor = nodes.find(n => n.type === 'reactor');
   const reactors = nodes.filter(n => n.type === 'reactor');
-  
-  const energyCost = reactors.length * 12.50;
-  const yieldGrade = (activeReactor?.data.conversion || 0) > 85 ? 'Grade AAA' : 'Grade B';
+  const activeReactor = reactors.find(n => n.data.status === 'running') || reactors[0];
+  const conversionRate = Math.round(activeReactor?.data.conversion || 0);
+  const liveQuality = activeReactor?.data.qualityGrade;
+  const yieldGrade = liveQuality ? `Grade ${liveQuality}` : 'Grade Pending';
+
+  const runningReactorCount = reactors.filter(r => r.data.status === 'running').length;
+  const errorCount = globalAlerts.filter(a => a.type === 'error').length;
+  const warningCount = globalAlerts.filter(a => a.type === 'warning').length;
+  const availability = reactors.length > 0 ? (runningReactorCount / reactors.length) * 100 : 100;
+  const alertPenalty = errorCount * 10 + warningCount * 4;
+  const systemEfficiency = Math.max(
+    0,
+    Math.min(100, Math.round((availability * 0.55 + conversionRate * 0.45) - alertPenalty))
+  );
 
   const BIN_LABELS = ['0.42mm', '0.48mm', '0.55mm', '0.62mm', '0.68mm', '0.75mm', '0.82mm'];
-  const activeReactorForPSD = reactors.find(n => n.data.status === 'running') || reactors[0];
+  const activeReactorForPSD = activeReactor;
   const psdBins = activeReactorForPSD?.data.psdBins || [12, 28, 85, 142, 95, 32, 8];
   const maxCount = Math.max(...psdBins, 150);
   
@@ -39,8 +47,9 @@ export const DashboardView: React.FC = () => {
     maxPossible: maxCount
   }));
 
+  const batchStatus = errorCount > 0 ? 'Alert' : batchStage === 'complete' ? 'Success' : 'Active';
   const recentBatches = [
-    { id: 'BT-LIVE-001', stage: batchStage, status: 'Active', time: `T+${simulationHistory[simulationHistory.length-1]?.tick || 0}` },
+    { id: 'BT-LIVE-001', stage: batchStage, status: batchStatus, time: `T+${simulationHistory[simulationHistory.length-1]?.tick || 0}` },
   ];
 
   return (
@@ -72,7 +81,7 @@ export const DashboardView: React.FC = () => {
                 <FaArrowUp className="text-xs text-emerald-500" />
              </div>
              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Active Reactors</p>
-             <h3 className="text-2xl font-black text-slate-800">{reactors.filter(r => r.data.status === 'running').length}<span className="text-xs text-slate-400 ml-1">/ {reactors.length}</span></h3>
+             <h3 className="text-2xl font-black text-slate-800">{runningReactorCount}<span className="text-xs text-slate-400 ml-1">/ {reactors.length}</span></h3>
           </ProCard>
 
           <ProCard className="pro-card !p-6">
@@ -83,7 +92,7 @@ export const DashboardView: React.FC = () => {
                 <span className="text-[10px] font-black text-orange-600 px-2 py-0.5 bg-orange-50 rounded">ACTIVE</span>
              </div>
              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Conversion Rate</p>
-             <h3 className="text-2xl font-black text-slate-800">{Math.round(activeReactor?.data.conversion || 0)}%</h3>
+             <h3 className="text-2xl font-black text-slate-800">{conversionRate}%</h3>
           </ProCard>
 
           <ProCard className="pro-card !p-6">
@@ -105,7 +114,7 @@ export const DashboardView: React.FC = () => {
                 <FaArrowDown className="text-xs text-slate-300" />
              </div>
              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">System Efficiency</p>
-             <h3 className="text-2xl font-black text-slate-800">92.4%</h3>
+             <h3 className="text-2xl font-black text-slate-800">{systemEfficiency}%</h3>
           </ProCard>
         </div>
 
@@ -185,7 +194,7 @@ export const DashboardView: React.FC = () => {
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
-                        {psdData.map((d, idx) => (
+                        {psdData.map((d) => (
                             <tr key={d.size} className="hover:bg-slate-50/50 transition-colors">
                                 <td className="py-4 text-xs font-bold text-slate-700">{d.size}</td>
                                 <td className="py-4 text-xs font-mono font-black text-slate-900">{d.count}</td>

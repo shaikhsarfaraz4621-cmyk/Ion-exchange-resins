@@ -9,6 +9,8 @@ type ChatMessage = {
   timestamp: string;
 };
 
+type ProactiveInsight = { key: string; text: string } | null;
+
 // ─── Local Fallback AI ───────────────────────────────────────────────────────
 const generateBotResponse = (query: string, state: ReturnType<typeof useSimulationStore.getState>): string => {
   const q = query.toLowerCase();
@@ -45,6 +47,61 @@ const generateBotResponse = (query: string, state: ReturnType<typeof useSimulati
   return `I can help with: plant status, buffer levels, reactor performance, inventory, temperature, and alerts. Try "What is the plant status?" or "How are the surge buffers?"`;
 };
 
+const getProactiveInsight = (state: ReturnType<typeof useSimulationStore.getState>): ProactiveInsight => {
+  const reactors = state.nodes.filter(n => n.type === 'reactor');
+  const buffers = state.nodes.filter(n => n.type === 'buffer');
+  const storages = state.nodes.filter(n => n.type === 'storage');
+
+  const hot = reactors
+    .filter(r => (r.data.temp || 25) >= 85)
+    .sort((a, b) => (b.data.temp || 25) - (a.data.temp || 25))[0];
+  if (hot) {
+    return {
+      key: `hot-${hot.id}-${Math.floor((hot.data.temp || 25) / 5)}`,
+      text: `📈 PROACTIVE INSIGHT: ${hot.data.label} is at ${(hot.data.temp || 25).toFixed(1)}°C, approaching thermal trip territory.\n\nBusiness impact: unexpected shutdown risk and unstable batch quality.\nRecommended action: apply cooling mitigation now to keep throughput stable.`,
+    };
+  }
+
+  const highBuffer = buffers
+    .filter(b => ((b.data.currentLevel || 0) / (b.data.capacity || 8000)) >= 0.85)
+    .sort((a, b) => ((b.data.currentLevel || 0) / (b.data.capacity || 8000)) - ((a.data.currentLevel || 0) / (a.data.capacity || 8000)))[0];
+  if (highBuffer) {
+    const pct = ((highBuffer.data.currentLevel || 0) / (highBuffer.data.capacity || 8000)) * 100;
+    return {
+      key: `buffer-${highBuffer.id}-${Math.floor(pct / 5)}`,
+      text: `📈 PROACTIVE INSIGHT: ${highBuffer.data.label} has reached ${pct.toFixed(0)}% capacity.\n\nBusiness impact: near-overflow can pause both lines and create downstream dryer starvation after interlock.\nRecommended action: drain buffer or reduce upstream load before overflow trigger.`,
+    };
+  }
+
+  const emptyTank = storages.find(s => (s.data.currentLevel || 0) <= 0);
+  if (emptyTank) {
+    return {
+      key: `tank-empty-${emptyTank.id}`,
+      text: `📈 PROACTIVE INSIGHT: ${emptyTank.data.label} is depleted.\n\nBusiness impact: feed starvation will halt polymerization and reduce effective utilization.\nRecommended action: replenish feed immediately to avoid batch discontinuity.`,
+    };
+  }
+
+  // Even when no hard fault exists, provide value-driving operational suggestions.
+  const runningReactors = reactors.filter(r => (r.data.status || "").toLowerCase() === "running");
+  const avgConversion = runningReactors.length > 0
+    ? runningReactors.reduce((acc, r) => acc + (r.data.conversion || 0), 0) / runningReactors.length
+    : 0;
+  const stage = (state.batchStage || "setup").toUpperCase();
+  const bucket = Math.floor((state.tick || 0) / 10);
+
+  if ((state.tick || 0) > 0) {
+    return {
+      key: `nominal-${stage}-${bucket}`,
+      text: `💡 PROACTIVE OPTIMIZATION: System is stable in ${stage} phase.\n\nCurrent average reactor conversion is ${avgConversion.toFixed(1)}%.\nSuggested action: maintain this operating window and monitor buffer fill trend to prevent dryer-side congestion.`,
+    };
+  }
+
+  return {
+    key: "nominal-start",
+    text: "💡 PROACTIVE OPTIMIZATION: Simulation initialized. Start the batch to receive live AI insights and interventions in real time.",
+  };
+};
+
 // ─── Component ───────────────────────────────────────────────────────────────
 export const PlantChatbot: React.FC = () => {
   const isChatOpen = useSimulationStore(state => state.isChatOpen);
@@ -52,6 +109,8 @@ export const PlantChatbot: React.FC = () => {
   const activeMitigation = useSimulationStore(state => state.activeMitigation);
   const setActiveMitigation = useSimulationStore(state => state.setActiveMitigation);
   const setIsSimulating = useSimulationStore(state => state.setIsSimulating);
+  const isSimulating = useSimulationStore(state => state.isSimulating);
+  const tick = useSimulationStore(state => state.tick);
 
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'bot', text: 'BlueStream AI Advisor online. I monitor all plant systems including surge buffers and reactor thermodynamics. Ask me anything.', timestamp: new Date().toLocaleTimeString() }
@@ -59,7 +118,9 @@ export const PlantChatbot: React.FC = () => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [mitigating, setMitigating] = useState(false);
+  const [injectingScenario, setInjectingScenario] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const lastInsightRef = useRef<{ key: string; tick: number } | null>(null);
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -78,6 +139,32 @@ export const PlantChatbot: React.FC = () => {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeMitigation, isChatOpen]);
+
+  // Proactive AI assistant: periodically surfaces actionable insight while simulation is running.
+  useEffect(() => {
+    if (!isChatOpen || !isSimulating) return;
+
+    const id = window.setInterval(() => {
+      const state = useSimulationStore.getState();
+      const insight = getProactiveInsight(state);
+      if (!insight) return;
+
+      const last = lastInsightRef.current;
+      const nowTick = state.tick || 0;
+      const sameKey = last?.key === insight.key;
+      const tooSoon = last ? nowTick - last.tick < 8 : false;
+      if (sameKey && tooSoon) return;
+
+      lastInsightRef.current = { key: insight.key, tick: nowTick };
+      setMessages(prev => [...prev, {
+        role: 'bot',
+        text: insight.text,
+        timestamp: new Date().toLocaleTimeString(),
+      }]);
+    }, 12000);
+
+    return () => window.clearInterval(id);
+  }, [isChatOpen, isSimulating]);
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
@@ -123,6 +210,27 @@ export const PlantChatbot: React.FC = () => {
       }]);
     } finally {
       setMitigating(false);
+    }
+  };
+
+  const handleInjectScenario = async (scenario: 'reactor_overheat' | 'feed_starvation' | 'buffer_overflow') => {
+    if (injectingScenario) return;
+    setInjectingScenario(true);
+    try {
+      const result = await api.triggerDemoScenario(scenario);
+      setMessages(prev => [...prev, {
+        role: 'bot',
+        text: `🧪 DEMO SCENARIO APPLIED: ${scenario.replace('_', ' ').toUpperCase()}\n\n${result.summary || 'Scenario injected successfully.'}\n\nThe system will detect this condition and recommend corrective mitigation in real time.`,
+        timestamp: new Date().toLocaleTimeString(),
+      }]);
+    } catch {
+      setMessages(prev => [...prev, {
+        role: 'bot',
+        text: '⚠️ Failed to inject demo scenario. Please verify backend connectivity.',
+        timestamp: new Date().toLocaleTimeString(),
+      }]);
+    } finally {
+      setInjectingScenario(false);
     }
   };
 
@@ -215,6 +323,35 @@ export const PlantChatbot: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Demo Controls */}
+      <div className="mx-4 mb-3 rounded-xl border border-blue-200 bg-blue-50 p-3 shrink-0">
+        <p className="text-[9px] font-black uppercase tracking-widest text-blue-700 mb-2">Demo Scenarios</p>
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            onClick={() => handleInjectScenario('reactor_overheat')}
+            disabled={injectingScenario}
+            className="py-2 rounded-lg text-[9px] font-black uppercase tracking-widest bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 transition-all disabled:opacity-50"
+          >
+            Overheat
+          </button>
+          <button
+            onClick={() => handleInjectScenario('feed_starvation')}
+            disabled={injectingScenario}
+            className="py-2 rounded-lg text-[9px] font-black uppercase tracking-widest bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 transition-all disabled:opacity-50"
+          >
+            Stockout
+          </button>
+          <button
+            onClick={() => handleInjectScenario('buffer_overflow')}
+            disabled={injectingScenario}
+            className="py-2 rounded-lg text-[9px] font-black uppercase tracking-widest bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 transition-all disabled:opacity-50"
+          >
+            Overflow
+          </button>
+        </div>
+        <p className="text-[8px] text-blue-600 font-bold mt-2">Live tick: T+{tick}m • Auto insights every 12s while running</p>
+      </div>
 
       {/* Input */}
       <div className="p-4 bg-white border-t border-slate-100 shrink-0">
