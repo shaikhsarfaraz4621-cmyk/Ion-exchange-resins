@@ -1,0 +1,137 @@
+import { useEffect, useCallback } from 'react';
+import { useSimulationStore } from '../store/simulationStore';
+import { api } from '../services/api';
+
+// Removed hard-coded mapErrorToMitigation function
+
+// ─── Hook ────────────────────────────────────────────────────────────────────
+export const useSimulation = () => {
+  const pollInterval = useSimulationStore(state => state.pollInterval);
+  const batchStage = useSimulationStore(state => state.batchStage);
+  const setBatchStage = useSimulationStore(state => state.setBatchStage);
+  const setNodes = useSimulationStore(state => state.setNodes);
+  const isSimulating = useSimulationStore(state => state.isSimulating);
+  const setIsSimulating = useSimulationStore(state => state.setIsSimulating);
+  const tick = useSimulationStore(state => state.tick);
+  const setTick = useSimulationStore(state => state.setTick);
+  const setIsChatOpen = useSimulationStore(state => state.setIsChatOpen);
+  const setActiveMitigation = useSimulationStore(state => state.setActiveMitigation);
+
+  const toggleSimulation = useCallback(async () => {
+    const nextIsSimulating = !isSimulating;
+    if (nextIsSimulating) {
+      api.startSimulation();
+    } else {
+      api.stopSimulation();
+    }
+    setIsSimulating(nextIsSimulating);
+  }, [isSimulating, setIsSimulating]);
+
+  const resetSimulation = useCallback(async () => {
+    await api.resetState();
+    await api.stopSimulation();
+    setIsSimulating(false);
+    setTick(0);
+    setBatchStage('setup');
+    setActiveMitigation(null);
+    const newState = await api.getState();
+    setNodes(newState.nodes || []);
+    useSimulationStore.setState({
+      inventory: newState.inventory || [],
+      edges: newState.edges || [],
+      globalAlerts: [],
+      batchStage: 'setup',
+      simulationHistory: [],
+      tick: 0,
+    });
+  }, [setBatchStage, setNodes, setIsSimulating, setTick, setActiveMitigation]);
+
+  // ─── Polling Loop with Safety Interlock ───────────────────────────────
+  useEffect(() => {
+    let timeoutId: number | undefined;
+    let cancelled = false;
+    let inFlight = false;
+
+    if (isSimulating) {
+      const runTick = async () => {
+        if (cancelled || inFlight) return;
+        inFlight = true;
+        try {
+          // In simulation mode, we call .tick() to advance physics AND get state.
+          // In non-simulation mode, we'd just call .getState() if needed.
+          const backendState = await api.tick();
+          useSimulationStore.getState().setIsBackendConnected(true);
+
+          // ── Safety Interlock ────────────────────────────────────────────
+          // If any CRITICAL ERROR is generated, auto-pause and pop the AI chat
+          const criticalError = backendState.alerts?.find(
+            (a: any) => a.type === 'error'
+          );
+
+          if (criticalError) {
+            // Stop simulation immediately
+            api.stopSimulation();
+            setIsSimulating(false);
+            cancelled = true; // Prevent further polling while we handle the error
+
+            // Pop the AI chat window open immediately so user sees something is happening
+            setIsChatOpen(true);
+
+            try {
+              // Ask the AI Advisor for the best mitigation action
+              const mitigation = await api.getAiMitigation(criticalError.message, criticalError.nodeId);
+              if (mitigation) {
+                setActiveMitigation(mitigation);
+              }
+            } catch (err) {
+              console.error('Failed to get AI mitigation:', err);
+            }
+          }
+
+          // ── Sync State to Frontend ────────────────────────────────────
+          const currentHistory = useSimulationStore.getState().simulationHistory || [];
+          const nextHistory = backendState.simulationHistory
+            || (backendState.history
+              ? [...currentHistory, backendState.history].slice(-50)
+              : currentHistory);
+
+          setTick(backendState.tick);
+          setNodes(backendState.nodes || []);
+          useSimulationStore.setState({
+            inventory: backendState.inventory || [],
+            edges: backendState.edges || [],
+            globalAlerts: backendState.alerts || [],
+            batchStage: backendState.batchStage || 'setup',
+            simulationHistory: nextHistory,
+          });
+
+        } catch (e) {
+          console.error('Failed to sync state from backend:', e);
+          useSimulationStore.getState().setIsBackendConnected(false);
+          // Auto stop if connection is lost
+          setIsSimulating(false);
+        } finally {
+          inFlight = false;
+          if (!cancelled && isSimulating) {
+            timeoutId = window.setTimeout(runTick, pollInterval);
+          }
+        }
+      };
+
+      runTick();
+    }
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    };
+  }, [isSimulating, setNodes, setTick, pollInterval, setIsSimulating, setIsChatOpen, setActiveMitigation]);
+
+  return {
+    isSimulating,
+    tick,
+    batchStage,
+    toggleSimulation,
+    resetSimulation,
+  };
+};
