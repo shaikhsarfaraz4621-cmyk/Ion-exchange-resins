@@ -4,7 +4,6 @@ import {
   FaRulerCombined, 
   FaThermometerHalf, 
   FaShieldAlt, 
-  FaDatabase, 
   FaSave,
   FaCalendarAlt
 } from 'react-icons/fa';

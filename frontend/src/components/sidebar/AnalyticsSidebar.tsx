@@ -1,6 +1,5 @@
 import React from 'react';
 import { FaChartLine, FaExclamationTriangle, FaInfoCircle, FaClock } from 'react-icons/fa';
-import { GlassCard } from '../shared/GlassCard';
 import { useSimulationStore } from '../../store/simulationStore';
 
 export const AnalyticsSidebar: React.FC = () => {

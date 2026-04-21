@@ -259,7 +259,6 @@ export const PackagerNode = memo(({ data, selected }: any) => {
 });
 
 export const SurgeBufferNode = memo(({ data, selected }: any) => {
-  const isRunning = data.status === 'running';
   const levelPct = ((data.currentLevel || 0) / (data.capacity || 8000)) * 100;
   
   return (

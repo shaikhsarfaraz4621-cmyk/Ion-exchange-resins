@@ -17,7 +17,6 @@ const generateBotResponse = (query: string, state: ReturnType<typeof useSimulati
   const { nodes, inventory, batchStage, globalAlerts } = state;
   const reactors = nodes.filter(n => n.type === 'reactor');
   const storages = nodes.filter(n => n.type === 'storage');
-  const washer = nodes.find(n => n.type === 'washer');
   const dryer = nodes.find(n => n.type === 'dryer');
   const buffers = nodes.filter(n => n.type === 'buffer');
   const runningReactors = reactors.filter(r => r.data.status === 'running');

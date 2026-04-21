@@ -1,5 +1,4 @@
 import React from 'react';
-import { GlassCard } from '../shared/GlassCard';
 import { useSimulationStore } from '../../store/simulationStore';
 import { FaDatabase, FaWarehouse } from 'react-icons/fa';
 

@@ -5,14 +5,11 @@ import {
   FaSearch, 
   FaFilter, 
   FaFileExport, 
-  FaCalendarAlt, 
-  FaHourglassHalf,
-  FaCheckCircle,
-  FaArrowRight
+  FaCalendarAlt
 } from 'react-icons/fa';
 
 export const LogsView: React.FC = () => {
-  const { simulationHistory, globalAlerts, batchStage } = useSimulationStore();
+  const { globalAlerts, batchStage } = useSimulationStore();
 
   return (
     <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-slate-50">

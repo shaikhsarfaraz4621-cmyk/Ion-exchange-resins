@@ -19,7 +19,7 @@ interface SimulationStore {
   edges: Edge[];
   batchStage: 'setup' | 'polymerization' | 'functionalization' | 'hydration' | 'complete';
   globalAlerts: { id: string, type: 'warning' | 'error' | 'info', message: string, timestamp: string }[];
-  currentView: 'dashboard' | 'designer' | 'logs' | 'alerts' | 'settings' | 'inventory';
+  currentView: 'dashboard' | 'designer' | 'logs' | 'alerts' | 'settings' | 'inventory' | 'advisor';
   simulationHistory: { tick: number, temp: number, conversion: number, stock: number }[];
   inventory: InventoryItem[];
   tick: number;
@@ -47,7 +47,7 @@ interface SimulationStore {
   onNodesChange: OnNodesChange;
   onEdgesChange: OnEdgesChange;
   onConnect: (params: Connection | Edge) => void;
-  setCurrentView: (view: 'dashboard' | 'designer' | 'logs' | 'alerts' | 'settings' | 'inventory') => void;
+  setCurrentView: (view: 'dashboard' | 'designer' | 'logs' | 'alerts' | 'settings' | 'inventory' | 'advisor') => void;
   pushHistory: (snapshot: { tick: number, temp: number, conversion: number, stock: number }) => void;
   updateInventory: (id: string, delta: number) => void;
   pollInterval: number;
