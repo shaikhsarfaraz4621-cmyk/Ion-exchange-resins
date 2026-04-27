@@ -18,7 +18,7 @@ import {
 const ProCard = GlassCard;
 
 export const DashboardView: React.FC = () => {
-  const { simulationHistory, batchStage, nodes, globalAlerts } = useSimulationStore();
+  const { simulationHistory, batchStage, nodes, globalAlerts, recipe } = useSimulationStore();
 
   const reactors = nodes.filter(n => n.type === 'reactor');
   const activeReactor = reactors.find(n => n.data.status === 'running') || reactors[0];
@@ -115,6 +115,68 @@ export const DashboardView: React.FC = () => {
              </div>
              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">System Efficiency</p>
              <h3 className="text-2xl font-black text-slate-800">{systemEfficiency}%</h3>
+          </ProCard>
+        </div>
+
+        {/* Recipe Snapshot + Physics Outputs side by side */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <ProCard className="pro-card !p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Active Recipe Snapshot</h3>
+              <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded bg-indigo-50 text-indigo-600 border border-indigo-200">
+                {recipe.feedRateProfile}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-slate-50 border border-slate-100 rounded-lg p-3">
+                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">DVB %</p>
+                <p className="text-sm font-black text-slate-800">{recipe.dvbPercent.toFixed(2)}</p>
+              </div>
+              <div className="bg-slate-50 border border-slate-100 rounded-lg p-3">
+                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Initiator</p>
+                <p className="text-sm font-black text-slate-800">{recipe.initiatorDosage.toFixed(2)} g/L</p>
+              </div>
+              <div className="bg-slate-50 border border-slate-100 rounded-lg p-3">
+                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">M/W Ratio</p>
+                <p className="text-sm font-black text-slate-800">{recipe.monomerWaterRatio.toFixed(2)}</p>
+              </div>
+              <div className="bg-slate-50 border border-slate-100 rounded-lg p-3">
+                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Target PSD</p>
+                <p className="text-sm font-black text-slate-800">{recipe.targetPsdMin.toFixed(2)}–{recipe.targetPsdMax.toFixed(2)} mm</p>
+              </div>
+            </div>
+          </ProCard>
+
+          <ProCard className="pro-card !p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Live Physics Outputs</h3>
+              <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded bg-emerald-50 text-emerald-600 border border-emerald-200">
+                Phase 2
+              </span>
+            </div>
+            {(() => {
+              const d = activeReactor?.data;
+              const physicsItems = [
+                { label: 'Crosslink Density', value: d?.crosslinkDensity != null ? d.crosslinkDensity.toFixed(3) : '—', unit: '', color: d?.crosslinkDensity != null && d.crosslinkDensity > 1.2 ? 'text-amber-600' : 'text-slate-800' },
+                { label: 'Swelling Index', value: d?.swellingIndex != null ? d.swellingIndex.toFixed(3) : '—', unit: '', color: d?.swellingIndex != null && d.swellingIndex > 1.15 ? 'text-red-600' : 'text-slate-800' },
+                { label: 'Rigidity Index', value: d?.rigidityIndex != null ? d.rigidityIndex.toFixed(3) : '—', unit: '', color: d?.rigidityIndex != null && d.rigidityIndex < 0.55 ? 'text-amber-600' : 'text-emerald-700' },
+                { label: 'PSD Spread', value: d?.psdSpread != null ? d.psdSpread.toFixed(3) : '—', unit: 'mm', color: d?.psdSpread != null && d.psdSpread > 0.30 ? 'text-red-600' : 'text-slate-800' },
+                { label: 'Predicted WBC', value: d?.predictedWBC != null ? d.predictedWBC.toFixed(1) : '—', unit: '%', color: d?.predictedWBC != null && d.predictedWBC < 70 ? 'text-red-600' : 'text-emerald-700' },
+                { label: 'Ion Capacity', value: d?.predictedIonCapacity != null ? d.predictedIonCapacity.toFixed(2) : '—', unit: 'meq/mL', color: d?.predictedIonCapacity != null && d.predictedIonCapacity < 1.0 ? 'text-amber-600' : 'text-slate-800' },
+              ];
+              return (
+                <div className="grid grid-cols-2 gap-3">
+                  {physicsItems.map(item => (
+                    <div key={item.label} className="bg-slate-50 border border-slate-100 rounded-lg p-3">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{item.label}</p>
+                      <p className={`text-sm font-black ${item.color}`}>
+                        {item.value}{item.value !== '—' && item.unit ? ` ${item.unit}` : ''}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </ProCard>
         </div>
 

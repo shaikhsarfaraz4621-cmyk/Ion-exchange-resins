@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { NodeFactoryConfig, InventoryItem } from '../types';
+import type { NodeFactoryConfig, InventoryItem, RecipeConfig, StructuredRecommendation, MitigationEvent } from '../types';
 import { addEdge, applyNodeChanges, applyEdgeChanges } from 'reactflow';
 import type { Node, Edge, Connection, OnNodesChange, OnEdgesChange } from 'reactflow';
 import { api } from '../services/api';
@@ -19,7 +19,7 @@ interface SimulationStore {
   edges: Edge[];
   batchStage: 'setup' | 'polymerization' | 'functionalization' | 'hydration' | 'complete';
   globalAlerts: { id: string, type: 'warning' | 'error' | 'info', message: string, timestamp: string }[];
-  currentView: 'dashboard' | 'designer' | 'logs' | 'alerts' | 'settings' | 'inventory' | 'advisor';
+  currentView: 'dashboard' | 'designer' | 'logs' | 'alerts' | 'settings' | 'inventory' | 'advisor' | 'runs' | 'decisions';
   simulationHistory: { tick: number, temp: number, conversion: number, stock: number }[];
   inventory: InventoryItem[];
   tick: number;
@@ -55,8 +55,20 @@ interface SimulationStore {
   batchSize: number;
   interarrivalTicks: number;
   setSimulationSettings: (settings: { batchSize?: number, interarrivalTicks?: number }) => void;
+  recipe: RecipeConfig;
+  setRecipe: (recipe: Partial<RecipeConfig>) => void;
   isBackendConnected: boolean;
   setIsBackendConnected: (connected: boolean) => void;
+  /** Mirrored from backend each tick — used to keep AI advisor aligned with live sim */
+  cumulativeEnergyCost: number;
+  bottleneckNodeIds: string[];
+  // Phase 3
+  recommendations: StructuredRecommendation[];
+  mitigationLog: MitigationEvent[];
+  setRecommendations: (recs: StructuredRecommendation[]) => void;
+  setMitigationLog: (log: MitigationEvent[]) => void;
+  refreshRecommendations: () => Promise<void>;
+  refreshMitigationLog: () => Promise<void>;
 }
 
 // ─── Default Topology with Surge Buffers ────────────────────────────────────
@@ -131,8 +143,36 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   ],
   tick: 0,
   isSimulating: false,
+  recipe: {
+    dvbPercent: 7.0,
+    initiatorDosage: 0.8,
+    monomerWaterRatio: 0.33,
+    feedRateProfile: 'balanced',
+    targetPsdMin: 0.3,
+    targetPsdMax: 1.2,
+  },
   isBackendConnected: true,
   setIsBackendConnected: (connected) => set({ isBackendConnected: connected }),
+  cumulativeEnergyCost: 0,
+  bottleneckNodeIds: [],
+
+  // Phase 3
+  recommendations: [],
+  mitigationLog: [],
+  setRecommendations: (recs) => set({ recommendations: recs }),
+  setMitigationLog: (log) => set({ mitigationLog: log }),
+  refreshRecommendations: async () => {
+    try {
+      const recs = await api.getRecommendations();
+      set({ recommendations: Array.isArray(recs) ? recs : [] });
+    } catch { /* silent — backend may be restarting */ }
+  },
+  refreshMitigationLog: async () => {
+    try {
+      const log = await api.getMitigationLog();
+      set({ mitigationLog: Array.isArray(log) ? log : [] });
+    } catch { /* silent */ }
+  },
 
   // Chat / Mitigation
   isChatOpen: false,
@@ -213,5 +253,12 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   setSimulationSettings: (settings) => {
     set((state) => ({ ...state, ...settings }));
     api.updateState(settings);
-  }
+  },
+  setRecipe: (recipe) => {
+    set((state) => {
+      const merged = { ...state.recipe, ...recipe };
+      api.updateState({ recipe: merged });
+      return { recipe: merged };
+    });
+  },
 }));

@@ -9,7 +9,9 @@ import { LogsView } from './components/dashboard/LogsView';
 import { AlertsView } from './components/dashboard/AlertsView';
 import { SettingsView } from './components/dashboard/SettingsView';
 import { InventoryPulse } from './components/dashboard/InventoryPulse';
-import { AdvisorSidebarView } from './components/dashboard/AdvisorSidebarView';
+import { AdvisorView } from './components/dashboard/AdvisorView';
+import RunsView from './components/dashboard/RunsView';
+import DecisionView from './components/dashboard/DecisionView';
 import { PlantChatbot } from './components/chatbot/PlantChatbot';
 import { useSimulationStore } from './store/simulationStore';
 
@@ -44,7 +46,19 @@ function App() {
           </div>
         );
       case 'advisor':
-        return <AdvisorSidebarView />;
+        return <AdvisorView />;
+      case 'runs':
+        return (
+          <div className="flex-1 overflow-hidden bg-[#080f1a]">
+            <RunsView />
+          </div>
+        );
+      case 'decisions':
+        return (
+          <div className="flex-1 overflow-hidden flex flex-col bg-[#080f1a]">
+            <DecisionView />
+          </div>
+        );
       case 'designer':
       default:
         return (

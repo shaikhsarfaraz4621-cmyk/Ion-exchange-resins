@@ -4,8 +4,10 @@ Injects real-time simulation context into the prompt so the AI
 can give actionable, context-aware recommendations.
 """
 import os
+import uuid
+from datetime import datetime
 from openai import AsyncOpenAI
-from schemas import PlantState
+from schemas import PlantState, StructuredRecommendation, RecommendationSeverity, MitigationEvent
 
 
 # DeepSeek uses an OpenAI-compatible API
@@ -25,20 +27,357 @@ def _get_client() -> AsyncOpenAI:
     return _client
 
 
+def _recipe_physics_signals(state: PlantState) -> list[str]:
+    """Generate rule-based advisory signals from Phase 2 physics outputs."""
+    signals = []
+    reactors = [n for n in state.nodes if n.type == "reactor"]
+    for r in reactors:
+        d = r.data
+        if (d.psdSpread or 0) > 0.30:
+            signals.append(f"{r.id}: PSD spread high ({d.psdSpread:.2f}) — turbulence/stability imbalance, consider LOWER_RPM")
+        if (d.swellingIndex or 0) > 1.15:
+            signals.append(f"{r.id}: swelling risk elevated ({d.swellingIndex:.2f}) — DVB% may be too low")
+        if (d.rigidityIndex or 0) < 0.55:
+            signals.append(f"{r.id}: rigidity index low ({d.rigidityIndex:.2f}) — bead integrity risk, increase DVB% or initiator")
+        if (d.predictedWBC or 100) < 70:
+            signals.append(f"{r.id}: predicted WBC low ({d.predictedWBC:.1f}%) — check thermal peak and swelling index")
+        if (d.predictedIonCapacity or 2.0) < 1.0:
+            signals.append(f"{r.id}: ion-exchange capacity below threshold ({d.predictedIonCapacity:.2f} meq/mL)")
+        if (d.temp or 25) > 85 and state.recipe.feedRateProfile == "aggressive":
+            signals.append(f"{r.id}: thermal risk amplified by aggressive feed profile — consider START_COOLING or switch to balanced")
+    return signals
+
+
+def _now_ts() -> str:
+    return datetime.utcnow().strftime("%H:%M:%S")
+
+
+# ─── Phase 3: Decision Boundaries ───────────────────────────────
+
+# Thermal
+THERMAL_WATCH = 75.0
+THERMAL_RISK  = 85.0
+THERMAL_CRIT  = 100.0
+
+# PSD spread
+PSD_WATCH = 0.22
+PSD_RISK  = 0.30
+
+# Swelling index
+SWELL_WATCH = 1.05
+SWELL_RISK  = 1.15
+
+# WBC
+WBC_WATCH = 85.0
+WBC_RISK  = 70.0
+
+# Ion capacity
+ION_CAP_WATCH = 1.2
+ION_CAP_RISK  = 1.0
+
+# Feed fill ratio
+FEED_WATCH = 0.20
+FEED_RISK  = 0.08
+
+# Buffer fill ratio
+BUF_WATCH = 0.75
+BUF_RISK  = 0.90
+
+
+def _severity(watch_thresh: float, risk_thresh: float, value: float, higher_is_worse: bool = True) -> RecommendationSeverity:
+    """Return severity enum based on whether the value crosses watch/risk thresholds."""
+    if higher_is_worse:
+        if value >= risk_thresh:
+            return RecommendationSeverity.risk
+        if value >= watch_thresh:
+            return RecommendationSeverity.watch
+    else:
+        if value <= risk_thresh:
+            return RecommendationSeverity.risk
+        if value <= watch_thresh:
+            return RecommendationSeverity.watch
+    return RecommendationSeverity.safe
+
+
+def generate_structured_recommendations(state: PlantState) -> list[StructuredRecommendation]:
+    """
+    Phase 3 rule engine — produces structured condition→cause→action→impact cards.
+    Each card carries a severity band (safe / watch / risk / critical) and an optional
+    agentic command so the frontend can execute it directly.
+    """
+    recs: list[StructuredRecommendation] = []
+    reactors = [n for n in state.nodes if n.type == "reactor"]
+    storages = [n for n in state.nodes if n.type == "storage"]
+    buffers  = [n for n in state.nodes if n.type == "buffer"]
+    recipe   = state.recipe
+
+    for r in reactors:
+        d = r.data
+        temp       = d.temp or 25.0
+        rpm        = d.rpm or 120.0
+        psd_spread = d.psdSpread or 0.0
+        psd_mean   = d.psdMean or 0.62
+        swell      = d.swellingIndex or 0.0
+        wbc        = d.predictedWBC or 100.0
+        ion_cap    = d.predictedIonCapacity or 2.0
+        quality    = d.qualityGrade or "AAA"
+        status     = d.status or "idle"
+        conv       = d.conversion or 0.0
+        peak       = d.peakTemp or temp
+        label      = d.label
+
+        # ── Thermal ──────────────────────────────────────────────
+        if temp >= THERMAL_CRIT or status == "tripped":
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=r.id, nodeLabel=label,
+                severity=RecommendationSeverity.critical,
+                domain="thermal",
+                condition=f"Temperature at {temp:.1f}°C — reactor TRIPPED / above critical limit (110°C).",
+                rootCause="Exothermic runaway: initiator dosage or feed aggressiveness drove heat release faster than jacket cooling capacity.",
+                action=f"Activate emergency cooling on {label}. Issue START_COOLING to drop temperature below 65°C before restarting.",
+                expectedImpact="Temperature recovery to safe range within ~20 ticks. Prevents quality Fail grade and mechanical damage.",
+                command="START_COOLING", commandValue=r.id, timestamp=_now_ts()
+            ))
+        elif temp >= THERMAL_RISK:
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=r.id, nodeLabel=label,
+                severity=RecommendationSeverity.risk,
+                domain="thermal",
+                condition=f"Temperature at {temp:.1f}°C — above risk threshold ({THERMAL_RISK}°C).",
+                rootCause=f"Exothermic heat rate exceeding jacket cooling. Feed profile '{recipe.feedRateProfile}' and initiator {recipe.initiatorDosage:.2f} g/L are amplifying exotherm.",
+                action=f"Reduce RPM on {label} to lower agitation-driven heat input. Switch feed profile to 'conservative' if currently aggressive.",
+                expectedImpact=f"~5–10°C temperature drop per 10 ticks. Reduces trip probability from ~70% to <10% at this conversion.",
+                command="LOWER_RPM", commandValue=r.id, timestamp=_now_ts()
+            ))
+        elif temp >= THERMAL_WATCH:
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=r.id, nodeLabel=label,
+                severity=RecommendationSeverity.watch,
+                domain="thermal",
+                condition=f"Temperature at {temp:.1f}°C — entering watch band ({THERMAL_WATCH}–{THERMAL_RISK}°C).",
+                rootCause=f"Normal exothermic peak at {conv:.0f}% conversion. Peak temp so far: {peak:.1f}°C.",
+                action="Monitor closely. If temperature continues rising beyond 85°C, pre-emptively reduce RPM.",
+                expectedImpact="Early action here prevents escalation into the risk band and preserves AAA quality grade.",
+                command=None, commandValue=None, timestamp=_now_ts()
+            ))
+
+        # ── PSD / Turbulence ─────────────────────────────────────
+        if psd_spread >= PSD_RISK:
+            in_target = recipe.targetPsdMin <= psd_mean <= recipe.targetPsdMax
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=r.id, nodeLabel=label,
+                severity=RecommendationSeverity.risk,
+                domain="psd",
+                condition=f"PSD spread {psd_spread:.3f} mm (limit: {PSD_RISK} mm). Mean {psd_mean:.3f} mm {'✓ in target' if in_target else f'✗ outside target {recipe.targetPsdMin}–{recipe.targetPsdMax} mm'}.",
+                rootCause="Turbulence/stability ratio is too high — droplets are being fragmented beyond the target size window. Usually caused by RPM being above the optimal range for this impeller geometry.",
+                action=f"Reduce RPM on {label}. Target: bring turbulence/stability ratio back toward 1.0 to narrow the distribution.",
+                expectedImpact=f"PSD spread reduction of ~0.05–0.10 mm per 15 ticks. Off-spec fines/oversize fraction drops, improving sieve yield.",
+                command="LOWER_RPM", commandValue=r.id, timestamp=_now_ts()
+            ))
+        elif psd_spread >= PSD_WATCH:
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=r.id, nodeLabel=label,
+                severity=RecommendationSeverity.watch,
+                domain="psd",
+                condition=f"PSD spread {psd_spread:.3f} mm — approaching risk band ({PSD_RISK} mm limit).",
+                rootCause="Turbulence slightly elevated relative to droplet stability. Minor recipe–agitation mismatch.",
+                action="Consider reducing RPM by 10–15% as a precaution. Watch for further spread increase.",
+                expectedImpact="Keeps distribution narrow. Prevents off-spec escalation before quality grade degrades.",
+                command=None, commandValue=None, timestamp=_now_ts()
+            ))
+
+        # ── Swelling / DVB ───────────────────────────────────────
+        if swell > 0 and swell >= SWELL_RISK:
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=r.id, nodeLabel=label,
+                severity=RecommendationSeverity.risk,
+                domain="crosslink",
+                condition=f"Swelling index {swell:.3f} — above risk threshold ({SWELL_RISK}). Bead integrity compromised.",
+                rootCause=f"DVB% is low ({recipe.dvbPercent:.1f}%) relative to baseline. Under-crosslinked matrix absorbs excess water, leading to osmotic shock risk during wash.",
+                action="Increase DVB% in next batch recipe (try +1–2%). Alternatively raise initiator dosage to accelerate crosslink formation.",
+                expectedImpact="Each +1% DVB reduces swelling index by ~0.08. Osmotic shock risk and WBC loss decrease proportionally.",
+                command=None, commandValue=None, timestamp=_now_ts()
+            ))
+        elif swell > 0 and swell >= SWELL_WATCH:
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=r.id, nodeLabel=label,
+                severity=RecommendationSeverity.watch,
+                domain="crosslink",
+                condition=f"Swelling index {swell:.3f} — entering watch band. Polymer matrix slightly under-crosslinked.",
+                rootCause=f"DVB% ({recipe.dvbPercent:.1f}%) near lower operating boundary. Crosslink density may be insufficient for wash stage.",
+                action="No immediate action. Flag for next recipe iteration — consider +0.5% DVB.",
+                expectedImpact="Preventive adjustment keeps swelling inside safe range and protects WBC.",
+                command=None, commandValue=None, timestamp=_now_ts()
+            ))
+
+        # ── WBC ──────────────────────────────────────────────────
+        if conv > 20 and wbc <= WBC_RISK:
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=r.id, nodeLabel=label,
+                severity=RecommendationSeverity.risk,
+                domain="quality",
+                condition=f"Predicted WBC {wbc:.1f}% — critically low (threshold: {WBC_RISK}%). Bead fracture risk high.",
+                rootCause=f"Combined effect: thermal peak {peak:.1f}°C stressing beads + swelling index {swell:.3f} indicating under-crosslinked matrix.",
+                action="Apply jacket cooling to reduce thermal stress. Review DVB% and initiator dosage for next batch.",
+                expectedImpact="Each 5°C reduction in peak temperature improves WBC by ~1.5–2%. DVB correction recovers structure integrity.",
+                command="START_COOLING", commandValue=r.id, timestamp=_now_ts()
+            ))
+        elif conv > 20 and wbc <= WBC_WATCH:
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=r.id, nodeLabel=label,
+                severity=RecommendationSeverity.watch,
+                domain="quality",
+                condition=f"Predicted WBC {wbc:.1f}% — below optimal (threshold: {WBC_WATCH}%). Some bead loss likely.",
+                rootCause=f"Thermal peak {peak:.1f}°C combined with polymer structure stress from current recipe.",
+                action="Monitor temperature trend. If rising further, pre-emptively lower RPM to reduce heat.",
+                expectedImpact="Keeping temperature below 90°C preserves WBC above 85% for this recipe.",
+                command=None, commandValue=None, timestamp=_now_ts()
+            ))
+
+        # ── Ion Exchange Capacity ────────────────────────────────
+        if conv > 20 and ion_cap <= ION_CAP_RISK:
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=r.id, nodeLabel=label,
+                severity=RecommendationSeverity.watch,
+                domain="quality",
+                condition=f"Predicted ion-exchange capacity {ion_cap:.2f} meq/mL — below minimum threshold ({ION_CAP_RISK} meq/mL).",
+                rootCause="Low conversion + insufficient crosslink density reducing functional group density in the resin matrix.",
+                action="Allow conversion to proceed further before functionalization stage. Ensure H₂SO₄ stock is adequate for full functionalization.",
+                expectedImpact="Each 10% conversion increase adds ~0.06 meq/mL to predicted capacity. Full functionalization recovers ~15% capacity.",
+                command=None, commandValue=None, timestamp=_now_ts()
+            ))
+
+    # ── Feed Tank Starvation ─────────────────────────────────────
+    for s in storages:
+        d = s.data
+        level = d.currentLevel or 0.0
+        cap   = d.capacity or 1.0
+        ratio = level / cap
+        mat   = d.materialType or d.label
+
+        if ratio <= FEED_RISK:
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=s.id, nodeLabel=d.label,
+                severity=RecommendationSeverity.risk if ratio <= 0.03 else RecommendationSeverity.watch,
+                domain="feed",
+                condition=f"{d.label}: {level:.0f} L / {cap:.0f} L ({ratio*100:.0f}%) — critically low.",
+                rootCause=f"{'Tank empty — feed starvation active.' if level <= 0 else 'Stock depleting faster than resupply rate.'} Downstream reactors consuming {mat} continuously.",
+                action=f"Replenish {d.label} immediately to 85% capacity to restore feed continuity.",
+                expectedImpact="Prevents polymerization stoppage and batch discontinuity. Restores reactor throughput within 1–2 ticks.",
+                command="REPLENISH", commandValue=s.id, timestamp=_now_ts()
+            ))
+        elif ratio <= FEED_WATCH:
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=s.id, nodeLabel=d.label,
+                severity=RecommendationSeverity.watch,
+                domain="feed",
+                condition=f"{d.label}: {level:.0f} L / {cap:.0f} L ({ratio*100:.0f}%) — below reorder level.",
+                rootCause=f"Normal depletion during active batch. Current draw rate will exhaust {mat} within the next ~{int(level / max(1, cap * 0.005))} ticks.",
+                action=f"Schedule resupply of {d.label}. No immediate action required.",
+                expectedImpact="Proactive resupply avoids unplanned stop.",
+                command=None, commandValue=None, timestamp=_now_ts()
+            ))
+
+    # ── Surge Buffer Overflow ────────────────────────────────────
+    for b in buffers:
+        d = b.data
+        level = d.currentLevel or 0.0
+        cap   = d.capacity or 8000.0
+        ratio = level / cap
+
+        if ratio >= BUF_RISK:
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=b.id, nodeLabel=d.label,
+                severity=RecommendationSeverity.risk,
+                domain="buffer",
+                condition=f"{d.label}: {level:.0f} kg / {cap:.0f} kg ({ratio*100:.0f}%) — near overflow.",
+                rootCause="Downstream dryer throughput lagging behind upstream wash output. Surge buffer filling up, upstream interlock risk.",
+                action=f"Drain {d.label} to 40% to restore headroom. Reduce washer throughput upstream.",
+                expectedImpact="Clears overflow risk. Prevents upstream washer shutdown and production line interlock.",
+                command="DRAIN_BUFFER", commandValue=b.id, timestamp=_now_ts()
+            ))
+        elif ratio >= BUF_WATCH:
+            recs.append(StructuredRecommendation(
+                id=str(uuid.uuid4())[:8],
+                nodeId=b.id, nodeLabel=d.label,
+                severity=RecommendationSeverity.watch,
+                domain="buffer",
+                condition=f"{d.label}: {level:.0f} kg / {cap:.0f} kg ({ratio*100:.0f}%) — filling toward overflow.",
+                rootCause="Dryer throughput slightly below wash train output rate. Buffer accumulating.",
+                action="Monitor. If above 90%, initiate drain.",
+                expectedImpact="Early awareness prevents emergency drain.",
+                command=None, commandValue=None, timestamp=_now_ts()
+            ))
+
+    # Sort: critical first, then risk, watch, safe
+    _order = {RecommendationSeverity.critical: 0, RecommendationSeverity.risk: 1,
+              RecommendationSeverity.watch: 2, RecommendationSeverity.safe: 3}
+    recs.sort(key=lambda r: _order.get(r.severity, 9))
+    return recs
+
+
+def snapshot_mitigation_before(node_id: str, state: PlantState, action: str, trigger: str) -> MitigationEvent:
+    """Capture a before-snapshot for a mitigation event."""
+    node = next((n for n in state.nodes if n.id == node_id), None)
+    d = node.data if node else None
+    return MitigationEvent(
+        id=str(uuid.uuid4())[:8],
+        tick=state.tick,
+        timestamp=_now_ts(),
+        nodeId=node_id,
+        nodeLabel=d.label if d else node_id,
+        action=action,
+        triggerCondition=trigger,
+        beforeTemp=d.temp if d else None,
+        beforeRpm=d.rpm if d else None,
+        beforePsdSpread=d.psdSpread if d else None,
+        beforeWBC=d.predictedWBC if d else None,
+        beforeQuality=d.qualityGrade if d else None,
+    )
+
+
+def resolve_mitigation_after(event: MitigationEvent, state: PlantState) -> MitigationEvent:
+    """Fill in the after-snapshot for an existing mitigation event."""
+    node = next((n for n in state.nodes if n.id == event.nodeId), None)
+    d = node.data if node else None
+    return MitigationEvent(
+        **{**event.model_dump(),
+           "afterTemp": d.temp if d else None,
+           "afterRpm": d.rpm if d else None,
+           "afterPsdSpread": d.psdSpread if d else None,
+           "afterWBC": d.predictedWBC if d else None,
+           "afterQuality": d.qualityGrade if d else None,
+           "resolved": True}
+    )
+
+
 def _build_system_prompt(state: PlantState) -> str:
     """Build a rich system prompt injecting live plant metrics."""
 
     reactors = [n for n in state.nodes if n.type == "reactor"]
     storages = [n for n in state.nodes if n.type == "storage"]
-    washer = next((n for n in state.nodes if n.type == "washer"), None)
-    dryer = next((n for n in state.nodes if n.type == "dryer"), None)
-    packager = next((n for n in state.nodes if n.type == "packager"), None)
 
     reactor_lines = "\n".join([
         f"  - {r.data.label} (ID: {r.id}, Config: {r.data.configId}, Mode: {r.data.reactorMode or 'cation'}): "
         f"Pos(X:{r.position.x}, Y:{r.position.y}), Temp={r.data.temp or 25:.1f}°C (Peak: {r.data.peakTemp or 25:.1f}°C), "
         f"Conversion={r.data.conversion or 0:.1f}%, Status={r.data.status or 'idle'}, "
         f"AgitationPower={r.data.powerKw or 0:.2f} kW, QC Grade={r.data.qualityGrade or 'AAA'}, "
+        f"CrosslinkDensity={r.data.crosslinkDensity or 0:.3f}, SwellingIdx={r.data.swellingIndex or 0:.3f}, "
+        f"RigidityIdx={r.data.rigidityIndex or 0:.3f}, PSDspread={r.data.psdSpread or 0:.3f}, "
+        f"PredWBC={r.data.predictedWBC or 0:.1f}%, IonCap={r.data.predictedIonCapacity or 0:.2f} meq/mL, "
         f"IdleTime={r.data.waitTime or 0:.0f}s, Bottleneck={'YES' if r.data.isBottleneck else 'no'}"
         for r in reactors
     ])
@@ -86,12 +425,26 @@ def _build_system_prompt(state: PlantState) -> str:
     bottleneck_text = f"Current Bottleneck Node IDs: {bottlenecks}"
     energy_cost_text = f"${state.cumulativeEnergyCost or 0:.4f} USD cumulative energy cost this session."
 
-    return f"""You are BlueStream AI, the intelligent Process Optimization Advisor and Supervisory Controller for an Ion Exchange Resin manufacturing facility.
+    recipe = state.recipe
+    recipe_text = (
+        f"DVB%={recipe.dvbPercent}, Initiator={recipe.initiatorDosage} g/L, "
+        f"M/W Ratio={recipe.monomerWaterRatio}, Feed Profile={recipe.feedRateProfile}, "
+        f"Target PSD={recipe.targetPsdMin}–{recipe.targetPsdMax} mm"
+    )
+    physics_signals = _recipe_physics_signals(state)
+    physics_signal_text = "\n".join(f"  - {s}" for s in physics_signals) if physics_signals else "  None currently."
+
+    return f"""You are AUTONEX AI, the intelligent Process Optimization Advisor and Supervisory Controller for an Ion Exchange Resin manufacturing facility.
 You have deep expertise in chemical engineering and direct access to the plant's control systems.
+
+DATA SOURCE: The block below is the live simulation state for this request (tick {state.tick}, simulating={state.isSimulating}). It is merged with the operator's UI so numbers match what they see on screen.
 
 CURRENT PLANT STATE (Tick: {state.tick}, Batch Stage: {state.batchStage.value.upper()}):
 
-REACTORS:
+ACTIVE RECIPE:
+  {recipe_text}
+
+REACTORS (with physics outputs):
 {reactor_lines}
 
 FEED TANKS:
@@ -112,6 +465,17 @@ FACTORY CONFIGS:
 
 ACTIVE ALERTS:
 {alerts_text}
+
+RECIPE-PHYSICS SIGNALS (rule-based diagnostics):
+{physics_signal_text}
+
+RECIPE-PHYSICS ADVISORY RULES:
+- If PSD spread > 0.30: issue LOWER_RPM and explain turbulence/stability imbalance.
+- If swelling index > 1.15: advise increasing DVB% or reducing monomer/water ratio.
+- If rigidity index < 0.55: recommend raising DVB% and review initiator dosage.
+- If predicted WBC < 70%: highlight thermal stress and swelling shock risk.
+- If ion capacity < 1.0 meq/mL: flag incomplete functionalization or low crosslink density.
+- If temp > 85°C and feed profile = aggressive: strongly recommend switching to balanced and START_COOLING.
 
 ADVISORY & CONTROL INSTRUCTIONS:
 - You have SUPERVISORY CONTROL. If a user asks to change a parameter (RPM, Temp, Tank Level), you MUST issue a corresponding command.

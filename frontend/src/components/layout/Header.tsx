@@ -8,6 +8,7 @@ export const Header: React.FC = () => {
   const isSimulating = useSimulationStore(state => state.isSimulating);
   const stage = useSimulationStore(state => state.batchStage);
   const isBackendConnected = useSimulationStore(state => state.isBackendConnected);
+  const recipe = useSimulationStore(state => state.recipe);
   const { toggleSimulation, resetSimulation } = useSimulation();
   const onToggle = toggleSimulation;
   const onReset = resetSimulation;
@@ -41,6 +42,9 @@ export const Header: React.FC = () => {
             Backend Offline
           </div>
         )}
+        <div className="px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest bg-indigo-50 text-indigo-600 border border-indigo-200">
+          Recipe · DVB {recipe.dvbPercent.toFixed(1)}% · {recipe.feedRateProfile}
+        </div>
       </div>
 
       {/* NEW Phase Timeline (Professionalized) */}

@@ -43,6 +43,9 @@ export const useSimulation = () => {
       batchStage: 'setup',
       simulationHistory: [],
       tick: 0,
+      recipe: newState.recipe || useSimulationStore.getState().recipe,
+      cumulativeEnergyCost: 0,
+      bottleneckNodeIds: [],
     });
   }, [setBatchStage, setNodes, setIsSimulating, setTick, setActiveMitigation]);
 
@@ -103,7 +106,17 @@ export const useSimulation = () => {
             globalAlerts: backendState.alerts || [],
             batchStage: backendState.batchStage || 'setup',
             simulationHistory: nextHistory,
+            recipe: backendState.recipe || useSimulationStore.getState().recipe,
+            cumulativeEnergyCost: typeof backendState.cumulativeEnergyCost === 'number'
+              ? backendState.cumulativeEnergyCost
+              : useSimulationStore.getState().cumulativeEnergyCost,
+            bottleneckNodeIds: Array.isArray(backendState.bottleneckNodeIds)
+              ? backendState.bottleneckNodeIds
+              : useSimulationStore.getState().bottleneckNodeIds,
           });
+
+          // Phase 3 — refresh recommendations every tick (non-blocking, fire-and-forget)
+          useSimulationStore.getState().refreshRecommendations();
 
         } catch (e) {
           console.error('Failed to sync state from backend:', e);

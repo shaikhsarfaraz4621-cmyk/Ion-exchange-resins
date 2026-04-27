@@ -14,13 +14,14 @@ type ProactiveInsight = { key: string; text: string } | null;
 // ─── Local Fallback AI ───────────────────────────────────────────────────────
 const generateBotResponse = (query: string, state: ReturnType<typeof useSimulationStore.getState>): string => {
   const q = query.toLowerCase();
-  const { nodes, inventory, batchStage, globalAlerts } = state;
+  const { nodes, inventory, batchStage, globalAlerts, recipe } = state;
   const reactors = nodes.filter(n => n.type === 'reactor');
   const storages = nodes.filter(n => n.type === 'storage');
   const dryer = nodes.find(n => n.type === 'dryer');
   const buffers = nodes.filter(n => n.type === 'buffer');
   const runningReactors = reactors.filter(r => r.data.status === 'running');
   const emptyTanks = storages.filter(s => (s.data.currentLevel || 0) <= 0);
+  const activeReactor = runningReactors[0] || reactors[0];
 
   if (q.includes('status') || (q.includes('how') && q.includes('plant'))) {
     return `Plant Status: ${runningReactors.length}/${reactors.length} reactors active. Batch stage: ${batchStage.toUpperCase()}.\n\nBuffers:\n${buffers.map(b => `• ${b.data.label}: ${((b.data.currentLevel || 0) / (b.data.capacity || 8000) * 100).toFixed(0)}% full`).join('\n')}\n\n${emptyTanks.length > 0 ? `⚠️ ${emptyTanks.length} feed tank(s) depleted.` : 'All feed tanks operational.'}`;
@@ -43,7 +44,54 @@ const generateBotResponse = (query: string, state: ReturnType<typeof useSimulati
     if (globalAlerts.length === 0) return 'No active alerts. Plant is operating normally.';
     return `Active Alerts (${globalAlerts.length}):\n${globalAlerts.slice(0, 5).map(a => `• [${a.type.toUpperCase()}] ${a.message} (${a.timestamp})`).join('\n')}`;
   }
-  return `I can help with: plant status, buffer levels, reactor performance, inventory, temperature, and alerts. Try "What is the plant status?" or "How are the surge buffers?"`;
+
+  // Phase 2: Recipe and physics queries
+  if (q.includes('recipe') || q.includes('dvb') || q.includes('initiator') || q.includes('monomer')) {
+    return `Active Recipe:\n• DVB: ${recipe.dvbPercent.toFixed(2)}%\n• Initiator Dosage: ${recipe.initiatorDosage.toFixed(2)} g/L\n• Monomer/Water Ratio: ${recipe.monomerWaterRatio.toFixed(2)}\n• Feed Profile: ${recipe.feedRateProfile.toUpperCase()}\n• Target PSD: ${recipe.targetPsdMin.toFixed(2)}–${recipe.targetPsdMax.toFixed(2)} mm\n\nAdjust these in the Settings → Recipe & Batch Setup panel.`;
+  }
+  if (q.includes('crosslink') || q.includes('cross-link') || q.includes('cross link')) {
+    const d = activeReactor?.data;
+    const cl = d?.crosslinkDensity;
+    if (cl == null) return 'Crosslink density data not yet available — start the simulation to compute physics outputs.';
+    const advice = cl > 1.2 ? 'High crosslink density detected. This increases bead rigidity but may require higher agitation. Consider reducing DVB% if PSD spread is widening.' : cl < 0.5 ? 'Low crosslink density — beads may swell excessively. Consider increasing DVB% or initiator dosage.' : 'Crosslink density is within a stable operating range.';
+    return `Crosslink Density (${activeReactor?.data.label}): ${cl.toFixed(3)}\n\n${advice}`;
+  }
+  if (q.includes('swelling') || q.includes('swell')) {
+    const d = activeReactor?.data;
+    const si = d?.swellingIndex;
+    if (si == null) return 'Swelling index not yet available — start the simulation first.';
+    const advice = si > 1.15 ? 'Swelling risk is elevated. Higher DVB% or lower monomer/water ratio will reduce swelling capacity and improve bead integrity.' : 'Swelling index is within acceptable range.';
+    return `Swelling Index (${activeReactor?.data.label}): ${si.toFixed(3)}\n\n${advice}\n\nNote: Higher crosslink density → lower swelling. This is controlled directly by DVB%.`;
+  }
+  if (q.includes('psd') || q.includes('bead size') || q.includes('particle')) {
+    const d = activeReactor?.data;
+    const spread = d?.psdSpread;
+    const mean = d?.psdMean;
+    if (spread == null) return 'PSD data not yet computed. Start the simulation with reactors running.';
+    const advice = spread > 0.30 ? `⚠️ PSD spread is high (${spread.toFixed(3)} mm). This means the turbulence/stability ratio is off. Consider reducing RPM to narrow the distribution and hit your target PSD of ${recipe.targetPsdMin.toFixed(2)}–${recipe.targetPsdMax.toFixed(2)} mm.` : `PSD spread is acceptable (${spread.toFixed(3)} mm). Mean bead size is ${(mean || 0).toFixed(3)} mm, target is ${recipe.targetPsdMin.toFixed(2)}–${recipe.targetPsdMax.toFixed(2)} mm.`;
+    return `Bead Morphology (${activeReactor?.data.label}):\n• PSD Mean: ${(mean || 0).toFixed(3)} mm\n• PSD Spread: ${(spread || 0).toFixed(3)} mm\n\n${advice}`;
+  }
+  if (q.includes('wbc') || q.includes('whole bead') || q.includes('bead count')) {
+    const d = activeReactor?.data;
+    const wbc = d?.predictedWBC;
+    if (wbc == null) return 'WBC prediction not available yet — run the simulation first.';
+    const advice = wbc < 70 ? '⚠️ Predicted WBC is critically low. Check thermal peak, reduce aggressiveness of the feed profile, and review swelling index.' : wbc < 85 ? 'WBC is below optimal. Consider cooling interventions to reduce peak temperature stress on beads.' : 'Predicted WBC is excellent — bead integrity looks strong.';
+    return `Predicted Whole Bead Count (${activeReactor?.data.label}): ${wbc.toFixed(1)}%\n\n${advice}`;
+  }
+  if (q.includes('ion capacity') || q.includes('ion exchange capacity') || q.includes('meq')) {
+    const d = activeReactor?.data;
+    const ic = d?.predictedIonCapacity;
+    if (ic == null) return 'Ion capacity prediction not available yet — run the simulation first.';
+    const advice = ic < 1.0 ? '⚠️ Ion-exchange capacity is below 1.0 meq/mL. Ensure the batch reaches functionalization/hydration stages with sufficient crosslink density.' : `Ion-exchange capacity is ${ic.toFixed(2)} meq/mL — good functional yield.`;
+    return `Predicted Ion-Exchange Capacity (${activeReactor?.data.label}): ${ic.toFixed(2)} meq/mL\n\n${advice}`;
+  }
+  if (q.includes('physics') || q.includes('quality') || q.includes('grade')) {
+    const d = activeReactor?.data;
+    if (!d) return 'No active reactor found.';
+    return `Quality Diagnostics (${activeReactor?.data.label}):\n• Grade: ${d.qualityGrade || 'Pending'}\n• Crosslink Density: ${d.crosslinkDensity?.toFixed(3) ?? '—'}\n• Swelling Index: ${d.swellingIndex?.toFixed(3) ?? '—'}\n• Rigidity Index: ${d.rigidityIndex?.toFixed(3) ?? '—'}\n• PSD Spread: ${d.psdSpread?.toFixed(3) ?? '—'} mm\n• Predicted WBC: ${d.predictedWBC?.toFixed(1) ?? '—'}%\n• Ion Capacity: ${d.predictedIonCapacity?.toFixed(2) ?? '—'} meq/mL`;
+  }
+
+  return `I can help with: plant status, buffer levels, reactor performance, inventory, temperature, alerts, recipe settings, crosslink density, swelling index, PSD spread, WBC, and ion capacity. Try "What is the psd spread?" or "Explain crosslink density."`;
 };
 
 const getProactiveInsight = (state: ReturnType<typeof useSimulationStore.getState>): ProactiveInsight => {
@@ -78,6 +126,30 @@ const getProactiveInsight = (state: ReturnType<typeof useSimulationStore.getStat
       key: `tank-empty-${emptyTank.id}`,
       text: `📈 PROACTIVE INSIGHT: ${emptyTank.data.label} is depleted.\n\nBusiness impact: feed starvation will halt polymerization and reduce effective utilization.\nRecommended action: replenish feed immediately to avoid batch discontinuity.`,
     };
+  }
+
+  // Phase 2: Recipe-physics proactive insights
+  const activeReactor = reactors.find(r => (r.data.status || '').toLowerCase() === 'running') || reactors[0];
+  if (activeReactor) {
+    const d = activeReactor.data;
+    if ((d.psdSpread || 0) > 0.30) {
+      return {
+        key: `psd-spread-${activeReactor.id}-${Math.floor((d.psdSpread || 0) * 10)}`,
+        text: `📈 PROACTIVE INSIGHT: PSD spread is high (${(d.psdSpread || 0).toFixed(2)} mm) on ${d.label}.\n\nCause: turbulence/stability imbalance — agitation is fragmenting droplets beyond the target PSD window.\nRecommended action: reduce RPM to lower turbulence and narrow the distribution. Target PSD: ${state.recipe.targetPsdMin.toFixed(2)}–${state.recipe.targetPsdMax.toFixed(2)} mm.`,
+      };
+    }
+    if ((d.swellingIndex || 0) > 1.15) {
+      return {
+        key: `swelling-${activeReactor.id}-${Math.floor((d.swellingIndex || 0) * 10)}`,
+        text: `📈 PROACTIVE INSIGHT: Swelling index is elevated (${(d.swellingIndex || 0).toFixed(2)}) on ${d.label}.\n\nCause: crosslink density is below optimal — polymer matrix is too open, increasing water absorption risk.\nRecommended action: increase DVB% or reduce monomer/water ratio in the recipe settings.`,
+      };
+    }
+    if ((d.predictedWBC || 100) < 70 && (d.conversion || 0) > 20) {
+      return {
+        key: `wbc-low-${activeReactor.id}`,
+        text: `📈 PROACTIVE INSIGHT: Predicted Whole Bead Count is critically low (${(d.predictedWBC || 0).toFixed(1)}%) on ${d.label}.\n\nCause: high peak temperature and/or swelling stress is causing bead fracture risk.\nRecommended action: reduce feed aggressiveness and apply jacket cooling to lower peak temperature.`,
+      };
+    }
   }
 
   // Even when no hard fault exists, provide value-driving operational suggestions.
@@ -172,7 +244,21 @@ export const PlantChatbot: React.FC = () => {
     setInput('');
     setIsLoading(true);
     try {
-      const { reply } = await api.chatWithAdvisor(userMsg.text);
+      const st = useSimulationStore.getState();
+      const clientContext = {
+        tick: st.tick,
+        batchStage: st.batchStage,
+        recipe: st.recipe,
+        nodes: st.nodes,
+        edges: st.edges,
+        inventory: st.inventory,
+        globalAlerts: st.globalAlerts,
+        isSimulating: st.isSimulating,
+        cumulativeEnergyCost: st.cumulativeEnergyCost,
+        bottleneckNodeIds: st.bottleneckNodeIds,
+        simulationHistory: st.simulationHistory,
+      };
+      const { reply } = await api.chatWithAdvisor(userMsg.text, clientContext);
       setMessages(prev => [...prev, { role: 'bot', text: reply, timestamp: new Date().toLocaleTimeString() }]);
     } catch {
       const state = useSimulationStore.getState();

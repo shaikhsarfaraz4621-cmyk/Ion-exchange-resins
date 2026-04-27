@@ -9,7 +9,9 @@ import {
   FaSignOutAlt,
   FaBoxes,
   FaMicrochip,
-  FaRobot
+  FaRobot,
+  FaChartBar,
+  FaBrain,
 } from 'react-icons/fa';
 import { useSimulationStore } from '../../store/simulationStore';
 
@@ -28,6 +30,8 @@ export const SidebarNav: React.FC = () => {
     { id: 'alerts', icon: FaExclamationCircle, label: 'Alert Matrix' },
     { id: 'inventory', icon: FaBoxes, label: 'Inventory Pulse' },
     { id: 'advisor', icon: FaRobot, label: 'AI Advisor' },
+    { id: 'runs', icon: FaChartBar, label: 'Runs & Evidence' },
+    { id: 'decisions', icon: FaBrain, label: 'Decision Intelligence' },
   ];
 
   const NavItem = ({ item }: { item: typeof primaryNav[0] }) => {

@@ -5,12 +5,14 @@ import {
   FaThermometerHalf, 
   FaShieldAlt, 
   FaSave,
-  FaCalendarAlt
+  FaCalendarAlt,
+  FaFlask
 } from 'react-icons/fa';
 import { useSimulationStore } from '../../store/simulationStore';
+import RecipePresetsPanel from './RecipePresetsPanel';
 
 export const SettingsView: React.FC = () => {
-  const { batchSize, interarrivalTicks, setSimulationSettings } = useSimulationStore();
+  const { batchSize, interarrivalTicks, setSimulationSettings, recipe, setRecipe } = useSimulationStore();
   return (
     <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-slate-50">
       <div className="max-w-4xl mx-auto space-y-8">
@@ -80,6 +82,97 @@ export const SettingsView: React.FC = () => {
                         <input type="number" defaultValue={500} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm font-bold text-slate-800" />
                     </div>
                 </div>
+            </div>
+
+            {/* Recipe & Batch Setup */}
+            <div className="pro-card bg-blue-50/40 border border-blue-100 p-8 shadow-sm">
+                <div className="flex items-center gap-4 mb-8">
+                    <div className="p-3 rounded-xl bg-white text-blue-600 border border-blue-100 shadow-sm">
+                        <FaFlask className="text-xl" />
+                    </div>
+                    <div>
+                        <h3 className="text-sm font-black text-blue-900 uppercase tracking-widest">Recipe & Batch Setup</h3>
+                        <p className="text-[10px] text-blue-500 font-bold">Define chemistry baseline before starting a batch run.</p>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div className="space-y-2">
+                        <label className="text-[10px] font-black text-blue-700 uppercase tracking-widest">DVB Percentage (%)</label>
+                        <input
+                            type="number"
+                            min={1}
+                            max={20}
+                            step={0.1}
+                            value={recipe.dvbPercent}
+                            onChange={(e) => setRecipe({ dvbPercent: Number(e.target.value) })}
+                            className="w-full bg-white border border-blue-100 rounded-lg px-4 py-3 text-sm font-bold text-blue-900 focus:ring-2 focus:ring-blue-500 transition-all"
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-[10px] font-black text-blue-700 uppercase tracking-widest">Initiator Dosage (% or g/L)</label>
+                        <input
+                            type="number"
+                            min={0.1}
+                            max={5}
+                            step={0.1}
+                            value={recipe.initiatorDosage}
+                            onChange={(e) => setRecipe({ initiatorDosage: Number(e.target.value) })}
+                            className="w-full bg-white border border-blue-100 rounded-lg px-4 py-3 text-sm font-bold text-blue-900 focus:ring-2 focus:ring-blue-500 transition-all"
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-[10px] font-black text-blue-700 uppercase tracking-widest">Monomer / Water Ratio</label>
+                        <input
+                            type="number"
+                            min={0.1}
+                            max={1}
+                            step={0.01}
+                            value={recipe.monomerWaterRatio}
+                            onChange={(e) => setRecipe({ monomerWaterRatio: Number(e.target.value) })}
+                            className="w-full bg-white border border-blue-100 rounded-lg px-4 py-3 text-sm font-bold text-blue-900 focus:ring-2 focus:ring-blue-500 transition-all"
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-[10px] font-black text-blue-700 uppercase tracking-widest">Feed Profile</label>
+                        <select
+                            value={recipe.feedRateProfile}
+                            onChange={(e) => setRecipe({ feedRateProfile: e.target.value as typeof recipe.feedRateProfile })}
+                            className="w-full bg-white border border-blue-100 rounded-lg px-4 py-3 text-sm font-bold text-blue-900 focus:ring-2 focus:ring-blue-500 transition-all"
+                        >
+                            <option value="conservative">Conservative</option>
+                            <option value="balanced">Balanced</option>
+                            <option value="aggressive">Aggressive</option>
+                        </select>
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-[10px] font-black text-blue-700 uppercase tracking-widest">Target PSD Min (mm)</label>
+                        <input
+                            type="number"
+                            min={0.1}
+                            max={2}
+                            step={0.01}
+                            value={recipe.targetPsdMin}
+                            onChange={(e) => setRecipe({ targetPsdMin: Number(e.target.value) })}
+                            className="w-full bg-white border border-blue-100 rounded-lg px-4 py-3 text-sm font-bold text-blue-900 focus:ring-2 focus:ring-blue-500 transition-all"
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-[10px] font-black text-blue-700 uppercase tracking-widest">Target PSD Max (mm)</label>
+                        <input
+                            type="number"
+                            min={0.1}
+                            max={3}
+                            step={0.01}
+                            value={recipe.targetPsdMax}
+                            onChange={(e) => setRecipe({ targetPsdMax: Number(e.target.value) })}
+                            className="w-full bg-white border border-blue-100 rounded-lg px-4 py-3 text-sm font-bold text-blue-900 focus:ring-2 focus:ring-blue-500 transition-all"
+                        />
+                    </div>
+                </div>
+
+                {/* Recipe Presets — save/load named recipes */}
+                <RecipePresetsPanel />
             </div>
 
             {/* Production Scheduling */}

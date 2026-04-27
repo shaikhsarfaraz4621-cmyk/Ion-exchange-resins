@@ -38,6 +38,11 @@ DRYER_TEMP_MAX = 120.0
 SIG_K_BASE = 0.12                  # Base sigmoid steepness
 SIG_T0 = 30                        # Slightly delayed inflection for "Normal" period
 
+# ─── Phase 2: Recipe baseline calibration constants ──────────────
+DVB_BASE = 7.0
+INITIATOR_BASE = 0.8
+MONOMER_WATER_BASE = 0.33
+
 
 # ─── Helpers ────────────────────────────────────────────────────
 
@@ -93,6 +98,83 @@ def _sigmoidal_conversion(current_conversion: float, tick: int, power_factor: fl
     c_next = 100.0 / (1.0 + math.exp(-k * (t_eff + 1 - SIG_T0)))
     delta = c_next - current_conversion
     return max(0.0, delta)
+
+
+# ─── Phase 2: Recipe-Physics Helper Functions ───────────────────
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
+def _feed_profile_factor(feed_profile: str) -> float:
+    if feed_profile == "conservative":
+        return 0.9
+    if feed_profile == "aggressive":
+        return 1.15
+    return 1.0
+
+
+def _crosslink_density(dvb_percent: float, initiator: float, conversion: float) -> float:
+    x = 0.55 * (dvb_percent / DVB_BASE) + 0.20 * (initiator / INITIATOR_BASE) + 0.25 * (conversion / 100.0)
+    return _clamp(x, 0.1, 2.0)
+
+
+def _swelling_index(crosslink_density: float) -> float:
+    return _clamp(1.4 - 0.45 * crosslink_density, 0.1, 1.5)
+
+
+def _rigidity_index(crosslink_density: float) -> float:
+    return _clamp(0.5 + 0.5 * crosslink_density, 0.1, 2.0)
+
+
+def _turbulence_proxy(rpm: float, power_number: float, diameter_m: float) -> float:
+    return _clamp((rpm / 120.0) * (power_number / 5.0) * (diameter_m / 2.0), 0.1, 4.0)
+
+
+def _stability_proxy(monomer_water_ratio: float, crosslink_density: float) -> float:
+    ratio_term = 1.0 - abs(monomer_water_ratio - MONOMER_WATER_BASE) * 1.8
+    x = ratio_term + 0.15 * crosslink_density
+    return _clamp(x, 0.2, 2.0)
+
+
+def _psd_outputs(turbulence: float, stability: float) -> tuple[float, float]:
+    ratio = turbulence / max(0.1, stability)
+    psd_mean = _clamp(0.62 - 0.05 * (ratio - 1.0), 0.25, 1.5)
+    psd_spread = _clamp(0.18 + 0.06 * abs(ratio - 1.0), 0.08, 0.8)
+    return psd_mean, psd_spread
+
+
+def _predicted_wbc(swelling_idx: float, rigidity_idx: float, thermal_peak: float) -> float:
+    score = 92.0 + (rigidity_idx - 1.0) * 6.0 - max(0.0, thermal_peak - 90.0) * 0.35 - abs(swelling_idx - 0.9) * 8.0
+    return _clamp(score, 40.0, 99.8)
+
+
+def _predicted_ion_capacity(conversion: float, crosslink_density: float, stage: str) -> float:
+    stage_boost = 1.0 if stage in ("functionalization", "hydration", "complete") else 0.85
+    val = (1.3 + 0.006 * conversion + 0.12 * crosslink_density) * stage_boost
+    return _clamp(val, 0.5, 3.0)
+
+
+def _quality_grade_composite(
+    conversion: float,
+    temp: float,
+    psd_mean: float,
+    psd_spread: float,
+    target_psd_min: float,
+    target_psd_max: float,
+    predicted_wbc: float,
+) -> str:
+    in_psd_band = target_psd_min <= psd_mean <= target_psd_max
+    spread_ok = psd_spread <= 0.30
+    if temp >= 110 or predicted_wbc < 60:
+        return "Fail"
+    if conversion >= 85 and in_psd_band and spread_ok and temp < 90 and predicted_wbc >= 92:
+        return "AAA"
+    if conversion >= 75 and in_psd_band and temp < 100 and predicted_wbc >= 85:
+        return "AA"
+    if conversion >= 60 and temp < 105:
+        return "B"
+    return "Fail"
 
 
 def _calc_qc_grade(max_temp_seen: float, final_moisture: float, power_adequate: bool) -> str:
@@ -278,7 +360,12 @@ def simulate_tick(state: PlantState) -> PlantState:
                 if 40.0 < next_conversion < 70.0:
                     auto_accel_factor = 2.5 + math.sin((next_conversion - 40) / 30 * math.pi) * 1.5
                 
-                exothermic_rise = REACTION_HEAT_SCALE * delta_conv * auto_accel_factor 
+                # Phase 2: feed profile modulates exothermic aggressiveness
+                recipe = state.recipe
+                feed_factor = _feed_profile_factor(recipe.feedRateProfile)
+                exothermic_rise = REACTION_HEAT_SCALE * delta_conv * auto_accel_factor * (
+                    1.0 + 0.18 * (recipe.initiatorDosage / INITIATOR_BASE - 1.0)
+                ) * feed_factor
                 cooling = JACKET_COOLING_RATE * (current_temp - JACKET_TEMP)
                 if cooling_mode:
                     # Emergency cooling profile during thermal recovery.
@@ -333,15 +420,33 @@ def simulate_tick(state: PlantState) -> PlantState:
                     state.globalAlerts = [a for a in state.globalAlerts if a.message != msg_temp]
 
                 # ── QC Tracking ───────────────────────────────
-                # Update peak temp seen on this reactor
                 nd.peakTemp = max(nd.peakTemp or 25.0, next_temp)
 
-                # Check agitation adequacy
-                power_adequate = power_kw >= 0.5  # minimum 0.5 kW threshold
-                nd.qualityGrade = _calc_qc_grade(
-                    nd.peakTemp,
-                    nd.moisture if nd.moisture is not None else 2.0,
-                    power_adequate
+                # ── Phase 2: Recipe-driven physics outputs ────
+                crosslink_density = _crosslink_density(recipe.dvbPercent, recipe.initiatorDosage, next_conversion)
+                swelling_idx = _swelling_index(crosslink_density)
+                rigidity_idx = _rigidity_index(crosslink_density)
+                turbulence = _turbulence_proxy(rpm, power_number, diameter_m)
+                stability = _stability_proxy(recipe.monomerWaterRatio, crosslink_density)
+                psd_mean, psd_spread = _psd_outputs(turbulence, stability)
+                pred_wbc = _predicted_wbc(swelling_idx, rigidity_idx, nd.peakTemp)
+                pred_ion_cap = _predicted_ion_capacity(next_conversion, crosslink_density, next_stage.value)
+
+                nd.crosslinkDensity = round(crosslink_density, 4)
+                nd.swellingIndex = round(swelling_idx, 4)
+                nd.rigidityIndex = round(rigidity_idx, 4)
+                nd.psdSpread = round(psd_spread, 4)
+                nd.predictedWBC = round(pred_wbc, 2)
+                nd.predictedIonCapacity = round(pred_ion_cap, 3)
+
+                nd.qualityGrade = _quality_grade_composite(
+                    conversion=next_conversion,
+                    temp=next_temp,
+                    psd_mean=psd_mean,
+                    psd_spread=psd_spread,
+                    target_psd_min=recipe.targetPsdMin,
+                    target_psd_max=recipe.targetPsdMax,
+                    predicted_wbc=pred_wbc,
                 )
 
                 # Reagent consumption by process stage (continuous, per running reactor).
@@ -368,22 +473,20 @@ def simulate_tick(state: PlantState) -> PlantState:
                 # ── Real Diagnostics & PSD Bins ──────────────
                 nd.exothermicDelta = round(exothermic_rise, 2)
                 nd.pressure = round(1.0 + (power_kw * 0.1) + (current_temp - 25.0)*0.02, 2)
-                
-                # PSD Math model (7 bins)
-                psd_mean = 0.62 + (current_temp - 60.0) * 0.005 if current_temp > 60.0 else 0.62
+
+                # PSD from recipe-physics model (psd_mean/psd_spread computed above)
                 nd.psdMean = round(psd_mean, 3)
 
-                # Generate bell curve bins centered around psd_mean
-                # As temp rises, distribution flattens
-                spread = 1.0 + max(0, (current_temp - 60.0) / 40.0)
+                # Bell curve bins shaped by psd_spread (wider spread = flatter curve)
+                spread_factor = 1.0 + (psd_spread / 0.18)
                 base_curve = [
-                    12 + spread*10, 
-                    28 + spread*5, 
-                    85 - spread*10, 
-                    142 - spread*20, 
-                    95 - spread*10, 
-                    32 + spread*15, 
-                    8 + spread*10
+                    12 + spread_factor * 10,
+                    28 + spread_factor * 5,
+                    85 - spread_factor * 10,
+                    142 - spread_factor * 20,
+                    95 - spread_factor * 10,
+                    32 + spread_factor * 15,
+                    8 + spread_factor * 10
                 ]
                 nd.psdBins = [max(0, int(b)) for b in base_curve]
 
