@@ -164,6 +164,7 @@ class PlantState(BaseModel):
     simulationHistory: list[HistoryPoint] = []
     inventory: list[InventoryItem]
     tick: int = 0
+    batchStartTick: int = 0   # Monotonic tick value when the current batch cycle began
     isSimulating: bool = False
     # COGS & Sequence Optimization
     cumulativeEnergyCost: Optional[float] = 0.0

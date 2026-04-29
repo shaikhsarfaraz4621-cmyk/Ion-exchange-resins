@@ -206,24 +206,35 @@ def simulate_tick(state: PlantState) -> PlantState:
     tick = state.tick + 1
 
     # ─── 1. Update Batch Stage & Scheduling ─────────────────────
+    # cycle_tick is the tick relative to the start of the current batch cycle.
+    # The global tick is monotonic and never resets.
+    batch_start = state.batchStartTick
+    cycle_tick = tick - batch_start
+
     next_stage = state.batchStage
-    if tick > 200:
+    if cycle_tick > 200:
         next_stage = BatchStage.complete
-    elif tick > 120:
+    elif cycle_tick > 120:
         next_stage = BatchStage.hydration
-    elif tick > 60:
+    elif cycle_tick > 60:
         next_stage = BatchStage.functionalization
-    elif tick > 10:
+    elif cycle_tick > 10:
         next_stage = BatchStage.polymerization
 
     if next_stage == BatchStage.complete:
         state.interarrivalCounter += 1
         if state.interarrivalCounter >= state.interarrivalTicks:
-            # Setup for next batch
-            tick = 0
+            # Begin next batch cycle — advance batchStartTick instead of resetting tick
+            batch_start = tick
             next_stage = BatchStage.setup
             state.interarrivalCounter = 0
-            state.tick = 0
+            state.batchStartTick = tick
+            new_alerts.append(Alert(
+                id=_generate_alert_id(),
+                type="info",
+                message=f"Batch cycle complete — new batch initiated at T+{tick}M",
+                timestamp=_get_timestamp(),
+            ))
 
     # ─── 2. Process Each Node ──────────────────────────────────
     updated_nodes: list[PlantNode] = []

@@ -55,16 +55,14 @@ export const SidebarNav: React.FC = () => {
     <nav className="w-64 bg-slate-950 flex flex-col h-full z-50 shadow-2xl shrink-0">
       
       {/* Brand Section */}
-      <div className="p-6 mb-4">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center shadow-[0_0_15px_rgba(37,99,235,0.4)]">
-            <div className="w-4 h-4 border-2 border-white rounded-sm rotate-45" />
-          </div>
-          <div>
-            <h1 className="text-white font-black tracking-tight text-lg">AUTO<span className="text-blue-500">NEX</span></h1>
-            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Enterprise Twin</p>
-          </div>
-        </div>
+      <div className="px-5 py-5 mb-2">
+        <img
+          src="/logo-white.png"
+          alt="AUTONEX"
+          className="h-8 w-auto object-contain select-none"
+          draggable={false}
+        />
+        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-2">Enterprise Twin</p>
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 space-y-8">

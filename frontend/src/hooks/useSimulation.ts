@@ -14,7 +14,6 @@ export const useSimulation = () => {
   const setIsSimulating = useSimulationStore(state => state.setIsSimulating);
   const tick = useSimulationStore(state => state.tick);
   const setTick = useSimulationStore(state => state.setTick);
-  const setIsChatOpen = useSimulationStore(state => state.setIsChatOpen);
   const setActiveMitigation = useSimulationStore(state => state.setActiveMitigation);
 
   const toggleSimulation = useCallback(async () => {
@@ -65,30 +64,27 @@ export const useSimulation = () => {
           const backendState = await api.tick();
           useSimulationStore.getState().setIsBackendConnected(true);
 
-          // ── Safety Interlock ────────────────────────────────────────────
-          // If any CRITICAL ERROR is generated, auto-pause and pop the AI chat
+          // ── Alert Logging (no stop) ─────────────────────────────────────
+          // Critical alerts are surfaced in the Alert Matrix and Production Logs.
+          // Simulation continues running; mitigations are applied automatically.
           const criticalError = backendState.alerts?.find(
             (a: any) => a.type === 'error'
           );
 
           if (criticalError) {
-            // Stop simulation immediately
-            api.stopSimulation();
-            setIsSimulating(false);
-            cancelled = true; // Prevent further polling while we handle the error
+            console.warn(`[ALERT] ${criticalError.message} (node: ${criticalError.nodeId ?? 'system'}) — simulation continues`);
 
-            // Pop the AI chat window open immediately so user sees something is happening
-            setIsChatOpen(true);
-
-            try {
-              // Ask the AI Advisor for the best mitigation action
-              const mitigation = await api.getAiMitigation(criticalError.message, criticalError.nodeId);
-              if (mitigation) {
-                setActiveMitigation(mitigation);
-              }
-            } catch (err) {
-              console.error('Failed to get AI mitigation:', err);
-            }
+            // Fetch AI mitigation in the background and apply it automatically
+            api.getAiMitigation(criticalError.message, criticalError.nodeId)
+              .then((mitigation: any) => {
+                if (mitigation) {
+                  setActiveMitigation(mitigation);
+                  // Auto-apply the mitigation so the plant self-heals
+                  api.mitigate(mitigation.action, mitigation.nodeId)
+                    .catch((err: unknown) => console.error('Auto-mitigation apply failed:', err));
+                }
+              })
+              .catch((err: unknown) => console.error('Failed to get AI mitigation:', err));
           }
 
           // ── Sync State to Frontend ────────────────────────────────────
@@ -138,7 +134,7 @@ export const useSimulation = () => {
       cancelled = true;
       if (timeoutId !== undefined) clearTimeout(timeoutId);
     };
-  }, [isSimulating, setNodes, setTick, pollInterval, setIsSimulating, setIsChatOpen, setActiveMitigation]);
+  }, [isSimulating, setNodes, setTick, pollInterval, setIsSimulating, setActiveMitigation]);
 
   return {
     isSimulating,
